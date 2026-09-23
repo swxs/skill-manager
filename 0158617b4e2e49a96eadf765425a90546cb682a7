@@ -1,0 +1,45 @@
+README.md
+  482d1728704db4fb 1,3,5,7,9-12,14,16-19,21,23,25,27,29,31,33,35-38,40,42-45,47,49,51-62,64,66,68,70,72-76,78,80,82,84,86-88,90-92,94,96-102,104,106-112,114,116,118-121,123,125,127,129,131-134,136,138-140,142,144,146
+.gitignore
+  h_ee4a963711c0f7 2-6
+  482d1728704db4fb 1
+.gitattributes
+  482d1728704db4fb 1
+scripts/skill_manager.py
+  482d1728704db4fb 23-30,233-234,287,365,415-417,506-507
+.github/workflows/ci.yml
+  482d1728704db4fb 1,3-5,7-22
+tests/test_skill_manager.py
+  482d1728704db4fb 1,3,5-13,15-16,18,21-29,31-36,38-43,45-49,51,62-65,67-71,73-84,86-101,103-109,111-122,124-130,132-142,144-149,151-152,154-168,170-179,181-189,191-199,201-203,205-209,211-221,224-225
+LICENSE
+  482d1728704db4fb 1,3,5-10,12-13,15-21
+pyproject.toml
+  482d1728704db4fb 1-7
+CHANGELOG.md
+  482d1728704db4fb 1,3,5-8
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.0",
+  "base_commit_sha": "0158617b4e2e49a96eadf765425a90546cb682a7",
+  "prompts": {
+    "482d1728704db4fb": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "e270457a-c00b-4b3e-b760-24d334bc6b98",
+        "model": "composer-2.5"
+      },
+      "human_author": "swxs",
+      "messages": [],
+      "total_additions": 456,
+      "total_deletions": 12,
+      "accepted_lines": 355,
+      "overriden_lines": 5
+    }
+  },
+  "humans": {
+    "h_ee4a963711c0f7": {
+      "author": "swxs"
+    }
+  }
+}
