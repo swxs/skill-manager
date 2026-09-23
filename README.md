@@ -1,0 +1,146 @@
+# skill-manager
+
+把本机技能目录装进 `~/.agents/skill-library`，再按配置链到当前仓库的 `.agents/skills`，或链到用户级 `~/.agents/skills`。
+
+这个仓库是公开的 skill 包。安装方式固定为克隆到 `~/.agents/skills/skill-manager`，这样技能正文里的脚本路径才成立。
+
+## 做什么
+
+- 把一个本机目录安装进技能库，并按磁盘重写 `.skill-lock.json`
+- 按 `.agents/skills.json` 把选中的技能链接进当前仓库
+- 按 `~/.agents/skills.json` 把选中的技能链接进 `~/.agents/skills`
+- 查看库、列出包内技能、从库里删除包
+
+## 不做什么
+
+- 不从网络下载技能，`install` 只接受本机目录
+- 不修改 `SKILL.md` 正文
+- 不覆盖已有链接，也不覆盖真实目录
+- 不给冲突的技能名加前缀
+
+## 依赖与平台
+
+脚本只使用 Python 标准库，没有第三方依赖。Python 3.9 及以上即可。
+
+推荐用 `uv run python` 运行。`uv` 会自备解释器，不要求系统里已经装好 Python。
+
+承诺支持 Windows、macOS 与 Linux。持续集成在 Ubuntu 与 Windows 上用 Python 3.9 和 3.13 跑测试。
+
+## 安装
+
+把仓库克隆到下面这个固定路径。需要 Gitee 镜像时，把克隆地址换成对应的 Gitee 仓库即可，目录不要变。
+
+macOS / Linux：
+
+```bash
+mkdir -p ~/.agents/skills
+git clone https://github.com/swxs/skill-manager.git ~/.agents/skills/skill-manager
+```
+
+Windows（PowerShell）：
+
+```powershell
+New-Item -ItemType Directory -Force -Path "$env:USERPROFILE\.agents\skills"
+git clone https://github.com/swxs/skill-manager.git "$env:USERPROFILE\.agents\skills\skill-manager"
+```
+
+## 命令
+
+在技能目录里执行。下面用 `uv run python scripts/skill_manager.py` 表示；装好之后也可以写成 `uv run python ~/.agents/skills/skill-manager/scripts/skill_manager.py`。
+
+| 命令 | 作用 |
+| --- | --- |
+| `status --root <根目录>` | 只查看库、global 配置和该仓库是否对齐，不改文件 |
+| `install <本机目录>` | 把该目录装进技能库。包名等于目录名 |
+| `link --root <根目录>` | 按该仓库的 `.agents/skills.json` 创建、更新或删除链接 |
+| `link --global` | 按 `~/.agents/skills.json` 链到 `~/.agents/skills`。配置不存在就报错，不建链接 |
+| `add --root <根目录> <包名或包名:技能名>` | 只把条目写入该仓库的 `.agents/skills.json`，不创建链接 |
+| `add --global <包名或包名:技能名>` | 只把条目写入 `~/.agents/skills.json`，文件不存在就创建 |
+| `lock` | 按磁盘重写 `.skill-lock.json`，不删目录 |
+| `list` | 列出库里的包 |
+| `list <包名>` | 列出该包里的技能 |
+| `remove <包名>` | 从库里删除该包，并重写索引。仓库里的链接要再跑一次 `link` 才会去掉 |
+
+不写 `--root` 时，`add` 和 `link` / `status` 使用当前目录。链接和查看要对当前每个工作区根目录各传一次 `--root`。
+
+`add` 要求库里已经有这项。混合包不能写成 `包名:技能名`。已有条目不重复添加。有一条不合法，整个配置都不改。
+
+## 库布局
+
+库根是 `~/.agents/skill-library/`。库根只放包，不直接放技能。
+
+| 类型 | 磁盘结构 | 安装来源 |
+| --- | --- | --- |
+| 单个技能（single） | `skill-library/<名>/<名>/SKILL.md` | 目录根上有 `SKILL.md`，子目录没有 |
+| 纯技能包（pack） | `skill-library/<包名>/<技能名>/SKILL.md` | 根上没有 `SKILL.md`，子目录有 |
+| 混合包（mixed） | 包根和子目录都有 `SKILL.md`，保持原目录，不套同名层 | 两边都有 |
+
+安装时跳过 `.git`、`__pycache__`、`.venv`、`node_modules`、`.DS_Store` 和 `.skill-lock.json`。以 `.` 开头的目录不计入技能，但其余文件仍会复制。
+
+`.skill-lock.json` 是磁盘索引。`install` 和 `remove` 会同时改目录和索引。`lock` 只按磁盘重写索引。
+
+## 配置格式
+
+仓库配置是 `<仓库>/.agents/skills.json`。用户级配置是 `~/.agents/skills.json`。两者都是字符串数组，可以带 `//` 行注释、块注释和尾随逗号。
+
+```json
+["mattpocock", "baoyu:baoyu-translate"]
+```
+
+- `包名`：纯包展开，每个技能一条链接，目标是 `.agents/skills/<技能名>`。只含一个技能的包同样展开成那一个技能。
+- `包名:技能名`：只链这一个技能。
+- 混合包只能写包名，整包一条链接到 `.agents/skills/<包名>`。
+
+## 链接行为
+
+- 优先创建符号链接。没有权限时，在 Windows 上用目录联接（junction）兜底。
+- 同名技能报冲突并跳过，不覆盖，不加前缀。
+- 目标路径已经是真实目录时跳过。`~/.agents/skills/skill-manager` 是这个工具自己的真实目录，`link --global` 不会删除或覆盖它。
+- global 配置里的技能名会盖住仓库同名链接：仓库 `link` 不新建这些名字，并删掉仓库里已有的同名链接。`status` 用同一套规则判断是否对齐。
+- 仓库 `link` 会维护该仓库 `.git/info/exclude` 里由本工具管理的一段，把新链入的 `.agents/skills/<名字>` 排除出版本库。`link --global` 不改 exclude。
+- 配置里去掉的链接，下次 `link` 时删除。
+- 新链入的技能从下一次 Agent 对话开始可用。
+
+## 平台支持
+
+| 能力 | Windows | macOS / Linux |
+| --- | --- | --- |
+| Python | 3.9+ | 3.9+ |
+| 符号链接 | 优先尝试 | 优先尝试 |
+| 目录联接 | 符号链接失败时兜底 | 不使用 |
+| 持续集成 | `windows-latest`，Python 3.9 与 3.13 | `ubuntu-latest`，Python 3.9 与 3.13 |
+| 换行 | 仓库文本与脚本写出的文件均为 LF | 同左 |
+
+## 卸载与回滚
+
+从库里卸下一个包：
+
+```bash
+uv run python scripts/skill_manager.py remove "<包名>"
+uv run python scripts/skill_manager.py link --root "<根目录>"
+```
+
+`remove` 只删库里的目录和索引。再跑 `link` 才会删掉仓库里指向它的链接。
+
+撤回某一次选择：从 `.agents/skills.json` 或 `~/.agents/skills.json` 删掉对应条目，再跑 `link` 或 `link --global`。被去掉的链接会删除，真实目录保持不动。
+
+卸掉这个工具本身：删除 `~/.agents/skills/skill-manager` 这个克隆。技能库、仓库链接和 `~/.agents/skills.json` 都还在，不受影响。
+
+## 开发
+
+```powershell
+$env:UV_CACHE_DIR = Join-Path $env:TEMP 'uvcache'
+uv run --no-project python -m unittest discover -s tests -v
+```
+
+`--no-project` 避免在技能目录里生成 `.venv`。要确认项目模式也能跑：
+
+```powershell
+uv run python -c "import sys; print(sys.version)"
+```
+
+测试通过 `SKILL_MANAGER_HOME` 和 `--library` 指向临时目录，不会读写真实的 `~/.agents`。
+
+## 许可
+
+[MIT](LICENSE)

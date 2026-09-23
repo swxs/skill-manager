@@ -1,0 +1,7 @@
+[project]
+name = "skill-manager"
+version = "0.1.0"
+description = "管理本机技能库，并按配置把技能链接到仓库"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
