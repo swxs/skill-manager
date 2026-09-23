@@ -1,11 +1,10 @@
 ---
 name: skill-manager
 description: >-
-  Installs local skill directories into ~/.agents/skill-library, rewrites
-  .skill-lock.json from disk, links selected packs into the current
-  repo's .agents/skills from .agents/skills.json, and lists packs or the
-  skills inside a pack. Use when the user runs /skill-manager, or asks to
-  install, link, lock, list, add, remove, or check skills.
+  Installs local or remote (git URL) skill packs into ~/.agents/skill-library,
+  rewrites .skill-lock.json, links from .agents/skills.json, and can init
+  global skills. Use when the user runs /skill-manager, or asks to
+  install, link, lock, list, add, remove, upgrade, init, or check skills.
 disable-model-invocation: true
 ---
 
@@ -23,7 +22,9 @@ uv run python ~/.agents/skills/skill-manager/scripts/skill_manager.py install "<
 uv run python ~/.agents/skills/skill-manager/scripts/skill_manager.py link --root "<根目录>"
 uv run python ~/.agents/skills/skill-manager/scripts/skill_manager.py link --global
 uv run python ~/.agents/skills/skill-manager/scripts/skill_manager.py add --root "<根目录>" "<包名或包名:技能名>"
-uv run python ~/.agents/skills/skill-manager/scripts/skill_manager.py add --global "<包名或包名:技能名>"
+uv run python ~/.agents/skills/skill-manager/scripts/skill_manager.py add --global "<包名、包名:技能名或 Git URL>"
+uv run python ~/.agents/skills/skill-manager/scripts/skill_manager.py upgrade "<包名>"
+uv run python ~/.agents/skills/skill-manager/scripts/skill_manager.py init
 uv run python ~/.agents/skills/skill-manager/scripts/skill_manager.py lock
 uv run python ~/.agents/skills/skill-manager/scripts/skill_manager.py list
 uv run python ~/.agents/skills/skill-manager/scripts/skill_manager.py list "<包名>"
@@ -32,7 +33,9 @@ uv run python ~/.agents/skills/skill-manager/scripts/skill_manager.py remove "<�
 
 `list` 不带包名时只列出包。带包名时列出该包里的技能。
 
-`add` 只改 json，不创建链接。不带 `--global` 时写 `--root` 对应仓库的 `.agents/skills.json`，不写 `--root` 就用当前目录。`add --global` 写 `~/.agents/skills.json`，文件不存在就创建。库里必须有这项，混合包不能单拆，已有条目不重复添加。有一条不合法就整个不改。
+`add` 只改 json，不自动 link。参数可以是库内 **包名** / **包名:技能名**，或 **Git URL**（可选 `#ref`）：URL 会先 fetch 进 skill-library（保留 `.git`），成功后再把 **包名** 写入配置；fetch 失败则整个不改。不带 `--global` 时写 `--root` 对应仓库的 `.agents/skills.json`。`add --global` 写 `~/.agents/skills.json`。库中缺包时输出会提示向用户要 Git URL。混合包不能单拆。有一条不合法就整个不改。
+
+用户要安装或启用技能时，尽量代跑 `add`（含 URL）→ `link` / `link --global`，不要手 copy 到 `.agents/skills`。
 
 `link --global` 按 global 配置把技能链到 `~/.agents/skills`。配置文件不存在就报错，不建链接。真实目录 `skill-manager` 不删除、不覆盖。
 
@@ -48,9 +51,11 @@ uv run python ~/.agents/skills/skill-manager/scripts/skill_manager.py remove "<�
 - 纯技能包：`skill-library/<包名>/<技能名>/SKILL.md`
 - 混合包：根上和子目录都有 `SKILL.md`，保持原目录，不套同名层
 
-`install` 只接受本机目录，包名等于该目录名。根上有 `SKILL.md` 且下面没有，按单个技能安装。根上没有、下面有，按纯包整棵复制。两边都有，按混合包原样复制。
+`install` 只接受本机目录，包名等于该目录名；尽量保留源目录的 `.git`，lock 的 `source`/`ref`/`revision` 从 git 解读。根上有 `SKILL.md` 且下面没有，按单个技能安装。根上没有、下面有，按纯包整棵复制。两边都有，按混合包原样复制。
 
-`.skill-lock.json` 是磁盘的索引。`install` 和 `remove` 会同时改目录和 lock。`lock` 只按磁盘重写索引，不删目录。
+`init` 只处理 global：把 `~/.agents/skills` 迁入 skill-library（`skill-manager` 真实目录跳过），写 `~/.agents/skills.json` 并 `link --global`。
+
+`.skill-lock.json` 是磁盘的索引。`install`、`remove`、`upgrade` 和 `lock` 会更新 lock。
 
 ## 仓库配置
 

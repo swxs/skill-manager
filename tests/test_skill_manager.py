@@ -121,6 +121,12 @@ class SkillManagerTests(unittest.TestCase):
         self.assertEqual(missing_skill, {})
         self.assertEqual(skill_problems, ["! 包 demo 里没有技能 missing"])
 
+    def test_missing_pack_hint_on_add(self) -> None:
+        _code, output = self.run_cli("add", "--global", "missing-pack")
+        self.assertIn("! 库中没有包 missing-pack", output)
+        self.assertIn("Git 仓库 URL", output)
+        self.assertFalse((self.home / "skills.json").exists())
+
     def test_resolve_selection_rejects_splitting_a_mixed_pack(self) -> None:
         mixed = self.library / "mix"
         self.write_skill(mixed)
@@ -172,7 +178,7 @@ class SkillManagerTests(unittest.TestCase):
         installed = self.library / "demo"
         self.assertTrue((installed / "one" / "SKILL.md").is_file())
         self.assertTrue((installed / "two" / "SKILL.md").is_file())
-        for name in (".git", "__pycache__", ".venv", "node_modules", ".DS_Store", ".skill-lock.json"):
+        for name in ("__pycache__", ".venv", "node_modules", ".DS_Store", ".skill-lock.json"):
             self.assertFalse((installed / name).exists(), name)
         lock_bytes = (self.library / ".skill-lock.json").read_bytes()
         self.assertNotIn(b"\r", lock_bytes)
@@ -219,6 +225,68 @@ class SkillManagerTests(unittest.TestCase):
         self.assertFalse((self.home / "skills" / "skill-manager" / "skills.json").exists())
         self.assertNotIn(b"\r", path.read_bytes())
         self.assertEqual(skill_manager.parse_jsonc(path.read_text(encoding="utf-8")), ["demo"])
+
+    def _git(self, *args: str, cwd: Path) -> None:
+        subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True)
+
+    def test_install_keeps_git_and_lock_metadata(self) -> None:
+        source = self.root / "sources" / "demo"
+        self.write_skill(source / "one")
+        self.write_skill(source / "two")
+        self._git("init", "-q", cwd=source)
+        self._git("config", "user.email", "t@example.com", cwd=source)
+        self._git("config", "user.name", "t", cwd=source)
+        self._git("add", ".", cwd=source)
+        self._git("commit", "-m", "init", cwd=source)
+        self._git("branch", "-M", "main", cwd=source)
+        self._git("remote", "add", "origin", "https://example.com/demo.git", cwd=source)
+
+        self.assertEqual(self.run_cli("install", str(source))[0], 0)
+        installed = self.library / "demo"
+        self.assertTrue((installed / ".git").is_dir())
+        lock = json.loads((self.library / ".skill-lock.json").read_text(encoding="utf-8"))
+        pack = lock["packs"]["demo"]
+        self.assertEqual(pack["source"], "https://example.com/demo.git")
+        self.assertIn("revision", pack)
+        self.assertEqual(pack["ref"], "main")
+
+    def test_add_git_url_fetches_then_writes_config(self) -> None:
+        upstream = self.root / "upstream"
+        self.write_skill(upstream / "alpha")
+        self._git("init", "-q", cwd=upstream)
+        self._git("config", "user.email", "t@example.com", cwd=upstream)
+        self._git("config", "user.name", "t", cwd=upstream)
+        self._git("add", ".", cwd=upstream)
+        self._git("commit", "-m", "init", cwd=upstream)
+        self._git("branch", "-M", "main", cwd=upstream)
+
+        repo = self.root / "repo"
+        repo.mkdir()
+        code, output = self.run_cli("add", "--root", str(repo), str(upstream))
+        self.assertEqual(code, 0, output)
+        self.assertTrue((self.library / "upstream").is_dir())
+        self.assertEqual(
+            skill_manager.parse_jsonc((repo / ".agents" / "skills.json").read_text(encoding="utf-8")),
+            ["upstream"],
+        )
+
+    def test_init_groups_global_links_into_pack_entry(self) -> None:
+        self.write_skill(self.library / "demo" / "one")
+        self.write_skill(self.library / "demo" / "two")
+        skill_manager.write_lock(self.library)
+        skills_home = self.home / "skills"
+        skills_home.mkdir(parents=True)
+        for name in ("one", "two"):
+            skill_manager.create_link(skills_home / name, self.library / "demo" / name)
+        (skills_home / "skill-manager").mkdir()
+
+        code, output = self.run_cli("init")
+        self.assertEqual(code, 0, output)
+        entries = skill_manager.parse_jsonc(
+            (self.home / "skills.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(entries, ["demo"])
+        self.assertTrue(skill_manager.link_target(skills_home / "one"))
 
 
 if __name__ == "__main__":

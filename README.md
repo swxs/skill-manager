@@ -13,7 +13,7 @@
 
 ## 不做什么
 
-- 不从网络下载技能，`install` 只接受本机目录
+- `install` 只接受本机目录；远程获取请用 `add` + Git URL
 - 不修改 `SKILL.md` 正文
 - 不覆盖已有链接，也不覆盖真实目录
 - 不给冲突的技能名加前缀
@@ -54,8 +54,10 @@ git clone https://github.com/swxs/skill-manager.git "$env:USERPROFILE\.agents\sk
 | `install <本机目录>` | 把该目录装进技能库。包名等于目录名 |
 | `link --root <根目录>` | 按该仓库的 `.agents/skills.json` 创建、更新或删除链接 |
 | `link --global` | 按 `~/.agents/skills.json` 链到 `~/.agents/skills`。配置不存在就报错，不建链接 |
-| `add --root <根目录> <包名或包名:技能名>` | 只把条目写入该仓库的 `.agents/skills.json`，不创建链接 |
-| `add --global <包名或包名:技能名>` | 只把条目写入 `~/.agents/skills.json`，文件不存在就创建 |
+| `add --root <根目录> <包名或 Git URL>` | 写入该仓库的 `.agents/skills.json`；参数为 Git URL 时先 fetch 进库（保留 `.git`），再写包名，不自动 link |
+| `add --global <包名或 Git URL>` | 同上，写入 `~/.agents/skills.json` |
+| `upgrade <包名>` | 对库内 git 包 fetch 并拉取 origin 默认分支（ff-only），更新 lock |
+| `init` | 仅 global：扫描 `~/.agents/skills`，迁入库、写 `~/.agents/skills.json`、lock 与 `link --global` |
 | `lock` | 按磁盘重写 `.skill-lock.json`，不删目录 |
 | `list` | 列出库里的包 |
 | `list <包名>` | 列出该包里的技能 |
@@ -63,7 +65,9 @@ git clone https://github.com/swxs/skill-manager.git "$env:USERPROFILE\.agents\sk
 
 不写 `--root` 时，`add` 和 `link` / `status` 使用当前目录。链接和查看要对当前每个工作区根目录各传一次 `--root`。
 
-`add` 要求库里已经有这项。混合包不能写成 `包名:技能名`。已有条目不重复添加。有一条不合法，整个配置都不改。
+`add` 在参数为 **包名** 时要求库里已有该包；参数为 **Git URL**（`https://`、`git@`、本机 git 目录、或以 `.git` 结尾的路径，可选 `#ref`）时会先 clone 进库，失败则整个不改配置。混合包不能写成 `包名:技能名`。已有条目不重复添加。库中缺包时脚本会提示提供 Git URL。
+
+配置写入后需再执行 `link` / `link --global` 才会创建链接。Agent 安装或启用技能时，应尽量代跑上述流程，不要手 copy 到 `.agents/skills`。
 
 ## 库布局
 
@@ -75,9 +79,9 @@ git clone https://github.com/swxs/skill-manager.git "$env:USERPROFILE\.agents\sk
 | 纯技能包（pack） | `skill-library/<包名>/<技能名>/SKILL.md` | 根上没有 `SKILL.md`，子目录有 |
 | 混合包（mixed） | 包根和子目录都有 `SKILL.md`，保持原目录，不套同名层 | 两边都有 |
 
-安装时跳过 `.git`、`__pycache__`、`.venv`、`node_modules`、`.DS_Store` 和 `.skill-lock.json`。以 `.` 开头的目录不计入技能，但其余文件仍会复制。
+安装时跳过 `__pycache__`、`.venv`、`node_modules`、`.DS_Store` 和源里的 `.skill-lock.json`；**尽量保留 `.git`**（便于 `upgrade`）。以 `.` 开头的目录不计入技能，但其余文件仍会复制。
 
-`.skill-lock.json` 是磁盘索引。`install` 和 `remove` 会同时改目录和索引。`lock` 只按磁盘重写索引。
+`.skill-lock.json` 是磁盘索引。每个包含 `kind`、`source`、`skills`；git 包另有 `ref`（当前分支/tag）与 `revision`（HEAD SHA）。有 `origin` 时 `source` 为远程 URL，否则为本机路径。`install`、`remove`、`upgrade` 与 `lock` 会更新索引。
 
 ## 配置格式
 

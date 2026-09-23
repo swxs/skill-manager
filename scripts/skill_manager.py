@@ -21,12 +21,16 @@ SKILLS_DIR_NAME = "skills"
 EXCLUDE_BEGIN = "# begin skill-manager"
 EXCLUDE_END = "# end skill-manager"
 INSTALL_IGNORE = (
-    ".git",
     "__pycache__",
     ".venv",
     "node_modules",
     ".DS_Store",
     LOCK_NAME,
+)
+INIT_SKIP_REAL_DIRS = frozenset({"skill-manager"})
+MISSING_PACK_HINT = (
+    "? 请提供 Git 仓库 URL（可选 #ref）以安装，"
+    "例如：add --global https://github.com/org/repo.git"
 )
 DEFAULT_LIBRARY = Path.home() / ".agents" / "skill-library"
 
@@ -211,6 +215,140 @@ def pack_dirs(library: Path) -> list[Path]:
     )
 
 
+def git_command(cwd: Path, *args: str) -> str | None:
+    result = subprocess.run(
+        ["git", "-C", str(cwd), *args],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    if result.returncode != 0:
+        return None
+    return (result.stdout or result.stderr or "").strip() or None
+
+
+def pack_git_root(pack: Path) -> Path | None:
+    if (pack / ".git").is_dir():
+        return pack
+    info = inspect_pack(pack)
+    if info["kind"] == "single":
+        nested = pack / pack.name
+        if (nested / ".git").is_dir():
+            return nested
+    return None
+
+
+def git_metadata(git_root: Path, fallback_source: str = "") -> dict[str, str]:
+    meta: dict[str, str] = {}
+    remote = git_command(git_root, "remote", "get-url", "origin")
+    if remote:
+        meta["source"] = remote
+    elif fallback_source:
+        meta["source"] = fallback_source
+    revision = git_command(git_root, "rev-parse", "HEAD")
+    if revision:
+        meta["revision"] = revision
+    ref = git_command(git_root, "symbolic-ref", "-q", "--short", "HEAD")
+    if not ref:
+        ref = git_command(git_root, "describe", "--tags", "--always")
+    if ref:
+        meta["ref"] = ref
+    return meta
+
+
+def is_git_url(text: str) -> bool:
+    stripped = text.strip()
+    if not stripped:
+        return False
+    if stripped.startswith("git@"):
+        return True
+    if "://" in stripped:
+        return True
+    if stripped.endswith(".git"):
+        return True
+    candidate = Path(stripped)
+    try:
+        if candidate.is_dir() and (candidate / ".git").exists():
+            return True
+    except OSError:
+        pass
+    return False
+
+
+def parse_git_spec(text: str) -> tuple[str, str | None]:
+    stripped = text.strip()
+    ref: str | None = None
+    if "#" in stripped:
+        stripped, ref = stripped.rsplit("#", 1)
+        ref = ref.strip() or None
+    return stripped.strip(), ref
+
+
+def pack_name_from_git_url(url: str) -> str:
+    cleaned = url.rstrip("/")
+    if cleaned.endswith(".git"):
+        cleaned = cleaned[:-4]
+    name = Path(cleaned.replace(":", "/")).name
+    if not valid_name(name):
+        raise ValueError(f"无法从 URL 推导包名: {url}")
+    return name
+
+
+def git_clone(url: str, dest: Path, ref: str | None = None) -> None:
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    result = subprocess.run(
+        ["git", "clone", url, str(dest)],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    if result.returncode != 0:
+        detail = (result.stdout or "") + (result.stderr or "")
+        raise RuntimeError(detail.strip() or "git clone 失败")
+    if ref:
+        checkout = subprocess.run(
+            ["git", "-C", str(dest), "checkout", ref],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+        if checkout.returncode != 0:
+            shutil.rmtree(dest)
+            detail = (checkout.stdout or "") + (checkout.stderr or "")
+            raise RuntimeError(detail.strip() or f"无法检出 ref: {ref}")
+
+
+def fetch_remote_pack(
+    library: Path, url: str, ref: str | None = None, pack_name: str | None = None
+) -> str:
+    pack_name = pack_name or pack_name_from_git_url(url)
+    if not valid_name(pack_name):
+        raise ValueError(f"非法包名: {pack_name}")
+    dest = library / pack_name
+    if dest.exists() or link_target(dest) is not None:
+        return pack_name
+    library.mkdir(parents=True, exist_ok=True)
+    try:
+        git_clone(url, dest, ref)
+        classify_source(dest)
+    except Exception:
+        if dest.exists() and link_target(dest) is None:
+            shutil.rmtree(dest, ignore_errors=True)
+        raise
+    write_lock(library)
+    return pack_name
+
+
+def print_problems(problems: list[str]) -> None:
+    for line in problems:
+        print(line if line.startswith("!") else f"! {line}")
+    if any("! 库中没有包" in item for item in problems):
+        print(MISSING_PACK_HINT)
+
+
 def write_lock(library: Path, source_overrides: dict[str, str] | None = None) -> None:
     library.mkdir(parents=True, exist_ok=True)
     previous = read_lock(library).get("packs", {})
@@ -221,14 +359,18 @@ def write_lock(library: Path, source_overrides: dict[str, str] | None = None) ->
     for pack in pack_dirs(library):
         info = inspect_pack(pack)
         old = previous.get(pack.name)
-        source = overrides.get(pack.name, "")
-        if not source and isinstance(old, dict) and isinstance(old.get("source"), str):
-            source = old["source"]
-        packs[pack.name] = {
+        fallback = overrides.get(pack.name, "")
+        if not fallback and isinstance(old, dict) and isinstance(old.get("source"), str):
+            fallback = old["source"]
+        git_root = pack_git_root(pack)
+        entry: dict[str, object] = {
             "kind": info["kind"],
-            "source": source,
+            "source": fallback,
             "skills": info["skills"],
         }
+        if git_root:
+            entry.update(git_metadata(git_root, fallback_source=fallback))
+        packs[pack.name] = entry
     payload = {"version": 1, "packs": packs}
     with lock_path(library).open("w", encoding="utf-8", newline="\n") as handle:
         handle.write(json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
@@ -322,7 +464,12 @@ def install_pack(library: Path, src: Path) -> int:
         if dest.exists() and link_target(dest) is None:
             shutil.rmtree(dest)
         raise
-    write_lock(library, {pack_name: str(src)})
+    git_root = pack_git_root(dest)
+    fallback = str(src)
+    if git_root:
+        meta = git_metadata(git_root, fallback_source=fallback)
+        fallback = meta.get("source", fallback)
+    write_lock(library, {pack_name: fallback})
     info = inspect_pack(dest)
     print(f"已安装 {pack_name} ({info['kind']})")
     for skill in info["skills"]:
@@ -617,6 +764,8 @@ def apply_links(
         print(f"  = 未变化 {line}")
     for line in problems:
         print(f"  {line}" if line.startswith("!") else f"  ! {line}")
+    if any("! 库中没有包" in item for item in problems):
+        print(f"  {MISSING_PACK_HINT}")
     for line in owned:
         print(f"  · 仓库自有目录，未改动 {line}")
     for line in skipped:
@@ -793,13 +942,33 @@ def cmd_link_global(library: Path) -> int:
     )
 
 
-def cmd_add(library: Path, names: list[str], root: Path, use_global: bool) -> int:
-    problems: list[str] = []
+def resolve_add_names(library: Path, names: list[str]) -> tuple[list[str], int]:
+    resolved: list[str] = []
     for name in names:
+        if is_git_url(name):
+            url, ref = parse_git_spec(name)
+            try:
+                pack_name = fetch_remote_pack(library, url, ref)
+            except (ValueError, RuntimeError, OSError) as exc:
+                print(str(exc))
+                return [], 1
+            print(f"已获取远程包 {pack_name}")
+            resolved.append(pack_name)
+        else:
+            resolved.append(name)
+    return resolved, 0
+
+
+def cmd_add(library: Path, names: list[str], root: Path, use_global: bool) -> int:
+    resolved, code = resolve_add_names(library, names)
+    if code != 0:
+        print("未修改配置")
+        return code
+    problems: list[str] = []
+    for name in resolved:
         problems.extend(validate_entry(library, name))
     if problems:
-        for line in problems:
-            print(line if line.startswith("!") else f"! {line}")
+        print_problems(problems)
         print("未修改配置")
         return 1
     if use_global:
@@ -818,7 +987,7 @@ def cmd_add(library: Path, names: list[str], root: Path, use_global: bool) -> in
     added: list[str] = []
     current = list(existing)
     seen = {item.casefold() for item in current}
-    for name in names:
+    for name in resolved:
         if name.casefold() in seen:
             print(f"已存在 {name}")
             continue
@@ -843,6 +1012,155 @@ def cmd_lock(library: Path) -> int:
     print(f"已按磁盘重写 {lock_path(library)}")
     print_library(library)
     return 0
+
+
+def origin_default_branch(git_root: Path) -> str:
+    ref = git_command(git_root, "symbolic-ref", "refs/remotes/origin/HEAD")
+    if ref:
+        return ref.rsplit("/", maxsplit=1)[-1]
+    for branch in ("main", "master"):
+        if git_command(git_root, "show-ref", "--verify", f"refs/remotes/origin/{branch}"):
+            return branch
+    remote = git_command(git_root, "branch", "-r")
+    if remote:
+        for line in remote.splitlines():
+            line = line.strip()
+            if line.startswith("origin/") and "HEAD" not in line:
+                return line.split("/", maxsplit=1)[1]
+    return "main"
+
+
+def upgrade_pack(library: Path, pack_name: str) -> int:
+    if not valid_name(pack_name):
+        print(f"非法包名: {pack_name}")
+        return 2
+    dest = library / pack_name
+    if not dest.is_dir() or link_target(dest) is not None:
+        print(f"库里没有包: {pack_name}")
+        return 1
+    git_root = pack_git_root(dest)
+    if git_root is None:
+        print(f"包 {pack_name} 不是 git 工作区，无法 upgrade")
+        return 2
+    fetch = subprocess.run(
+        ["git", "-C", str(git_root), "fetch", "origin"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    if fetch.returncode != 0:
+        detail = (fetch.stdout or "") + (fetch.stderr or "")
+        print(detail.strip() or "git fetch 失败")
+        return 2
+    branch = origin_default_branch(git_root)
+    checkout = subprocess.run(
+        ["git", "-C", str(git_root), "checkout", branch],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    if checkout.returncode != 0:
+        detail = (checkout.stdout or "") + (checkout.stderr or "")
+        print(detail.strip() or f"无法切换到 {branch}")
+        return 2
+    pull = subprocess.run(
+        ["git", "-C", str(git_root), "pull", "--ff-only", "origin", branch],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    if pull.returncode != 0:
+        detail = (pull.stdout or "") + (pull.stderr or "")
+        print(detail.strip() or "git pull 失败")
+        return 2
+    write_lock(library)
+    meta = git_metadata(git_root)
+    print(f"已升级 {pack_name} ({branch} @ {meta.get('revision', '?')})")
+    return 0
+
+
+def init_selection_entries(library: Path, skills_folder: Path) -> list[str]:
+    library_resolved = library.resolve()
+    by_pack: dict[str, set[str]] = {}
+    real_installs: list[Path] = []
+
+    if skills_folder.is_dir():
+        for entry in sorted(skills_folder.iterdir(), key=lambda item: item.name.casefold()):
+            if entry.name.startswith("."):
+                continue
+            if entry.name in INIT_SKIP_REAL_DIRS and link_target(entry) is None:
+                continue
+            target = link_target(entry)
+            if target is not None:
+                try:
+                    rel = target.resolve().relative_to(library_resolved)
+                except ValueError:
+                    resolved_target = target.resolve()
+                    if resolved_target.is_dir():
+                        real_installs.append(resolved_target)
+                    continue
+                pack_name = rel.parts[0]
+                skill_key = rel.parts[1] if len(rel.parts) >= 2 else pack_name
+                by_pack.setdefault(pack_name, set()).add(skill_key)
+                continue
+            real_installs.append(entry.resolve())
+
+    for src in real_installs:
+        if not src.is_dir():
+            continue
+        try:
+            classify_source(src)
+        except ValueError:
+            continue
+        pack_name = src.name
+        if not valid_name(pack_name):
+            continue
+        dest = library / pack_name
+        if not dest.exists() and link_target(dest) is None:
+            install_pack(library, src)
+        by_pack.setdefault(pack_name, set())
+
+    entries: list[str] = []
+    for pack_name in sorted(by_pack, key=str.casefold):
+        pack = library / pack_name
+        if not pack.is_dir():
+            continue
+        info = inspect_pack(pack)
+        skills = info["skills"]
+        assert isinstance(skills, list)
+        linked = by_pack.get(pack_name, set())
+        if info["kind"] == "mixed":
+            entries.append(pack_name)
+            continue
+        skill_names = {str(item) for item in skills}
+        if linked and linked >= skill_names:
+            entries.append(pack_name)
+        elif linked:
+            for skill in sorted(linked, key=str.casefold):
+                entries.append(f"{pack_name}:{skill}")
+        else:
+            entries.append(pack_name)
+    return entries
+
+
+def cmd_init(library: Path) -> int:
+    home = agent_home()
+    skills_folder = global_skills_dir()
+    print(f"init global: {skills_folder}")
+    print(f"库: {library}")
+    entries = init_selection_entries(library, skills_folder)
+    path = global_config_path()
+    comment = "// global 技能。运行 /skill-manager link --global。"
+    write_selection(path, entries, comment)
+    print(f"配置: {path}")
+    for entry in entries:
+        print(f"  + {entry}")
+    write_lock(library)
+    print(f"lock: {lock_path(library)}")
+    return cmd_link_global(library)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -874,6 +1192,11 @@ def main(argv: list[str] | None = None) -> int:
     status = sub.add_parser("status", help="只查看，不修改")
     status.add_argument("--root", action="append", type=Path)
 
+    upgrade = sub.add_parser("upgrade", help="从 origin 默认分支拉取 git 包")
+    upgrade.add_argument("pack")
+
+    sub.add_parser("init", help="将 global ~/.agents/skills 迁入 skill-library 并 link")
+
     args = parser.parse_args(argv)
     library = args.library.expanduser()
     cmd = args.cmd or "status"
@@ -895,6 +1218,10 @@ def main(argv: list[str] | None = None) -> int:
     roots = getattr(args, "root", None) or [Path.cwd()]
     if cmd == "link":
         return cmd_link(library, roots)
+    if cmd == "upgrade":
+        return upgrade_pack(library, args.pack)
+    if cmd == "init":
+        return cmd_init(library)
     return cmd_status(library, roots)
 
 
