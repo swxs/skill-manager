@@ -17,7 +17,7 @@ const (
 	SkillsDirName   = "skills"
 	ExcludeBegin    = "# begin skill-manager"
 	ExcludeEnd      = "# end skill-manager"
-	MissingPackHint = "? 请提供 Git 仓库 URL（可选 #ref）以安装，例如：add --global https://github.com/org/repo.git"
+	MissingPackHint = "? 请先 install 本机目录或 Git 仓库 URL（可选 #ref），例如：install https://github.com/org/repo.git"
 )
 
 var installIgnore = map[string]bool{

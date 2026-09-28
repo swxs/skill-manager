@@ -102,7 +102,7 @@ func ParseSpec(text string) (string, string) {
 	return stripped, ref
 }
 
-func nameFromURL(url string) (string, error) {
+func NameFromURL(url string) (string, error) {
 	cleaned := strings.TrimRight(url, "/")
 	if strings.HasSuffix(strings.ToLower(cleaned), ".git") {
 		cleaned = cleaned[:len(cleaned)-4]
@@ -119,7 +119,7 @@ func nameFromURL(url string) (string, error) {
 	return name, nil
 }
 
-func clone(url, dest, ref string) error {
+func Clone(url, dest, ref string) error {
 	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
 		return err
 	}
@@ -142,40 +142,37 @@ func clone(url, dest, ref string) error {
 	return nil
 }
 
-func Fetch(library, url, ref, packName string) (string, error) {
-	var err error
-	if packName == "" {
-		packName, err = nameFromURL(url)
-		if err != nil {
-			return "", err
+func CheckoutRef(pack, ref string) error {
+	if strings.TrimSpace(ref) == "" {
+		return fmt.Errorf("缺少 ref")
+	}
+	root := Root(pack)
+	if root == "" {
+		return fmt.Errorf("包不是 git 工作区，无法检出 %s", ref)
+	}
+	if text, err := Combined("-C", root, "fetch", "origin"); err != nil {
+		if text == "" {
+			text = "git fetch 失败"
 		}
+		return fmt.Errorf("%s", text)
 	}
-	if !lib.ValidName(packName) {
-		return "", fmt.Errorf("非法包名: %s", packName)
-	}
-	dest := filepath.Join(library, packName)
-	if lib.Exists(dest) || symlink.Target(dest) != "" {
-		return packName, nil
-	}
-	if err := os.MkdirAll(library, 0o755); err != nil {
-		return "", err
-	}
-	if err := clone(url, dest, ref); err != nil {
-		if lib.Exists(dest) && symlink.Target(dest) == "" {
-			_ = lib.RemoveTree(dest)
+	text, err := Combined("-C", root, "status", "--porcelain")
+	if err != nil {
+		if text == "" {
+			text = "无法读取工作区状态"
 		}
-		return "", err
+		return fmt.Errorf("%s", text)
 	}
-	if _, err := lib.ClassifySource(dest); err != nil {
-		if lib.Exists(dest) && symlink.Target(dest) == "" {
-			_ = lib.RemoveTree(dest)
+	if text != "" {
+		return fmt.Errorf("工作区不干净，未检出 %s", ref)
+	}
+	if text, err = Combined("-C", root, "checkout", ref); err != nil {
+		if text == "" {
+			text = "无法检出 ref: " + ref
 		}
-		return "", err
+		return fmt.Errorf("%s", text)
 	}
-	if err := WriteLock(library, map[string]string{}); err != nil {
-		return "", err
-	}
-	return packName, nil
+	return nil
 }
 
 type lockEntry struct {

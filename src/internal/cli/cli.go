@@ -14,7 +14,44 @@ import (
 	"github.com/swxs/skill-manager/internal/symlink"
 )
 
-func installPack(library, src string) int {
+func writeInstallLock(library, packName, fallback string, unlock bool) int {
+	if unlock {
+		return 0
+	}
+	overrides := map[string]string{}
+	if packName != "" {
+		overrides[packName] = fallback
+	}
+	if err := gitpack.WriteLock(library, overrides); err != nil {
+		fmt.Println(err.Error())
+		return 1
+	}
+	fmt.Printf("lock: %s\n", gitpack.LockPath(library))
+	return 0
+}
+
+func printInstalled(dest, packName, headline string) int {
+	info, err := lib.Inspect(dest)
+	if err != nil {
+		fmt.Println(err.Error())
+		return 1
+	}
+	fmt.Printf("%s %s (%s)\n", headline, packName, info.Kind)
+	for _, skill := range info.Skills {
+		fmt.Printf("  - %s\n", skill)
+	}
+	return 0
+}
+
+func refusePackLink(dest string) int {
+	if symlink.Target(dest) == "" {
+		return 0
+	}
+	fmt.Printf("拒绝在链接上安装: %s\n", dest)
+	return 2
+}
+
+func installLocal(library, src, ref string, unlock bool) int {
 	src = lib.Resolve(lib.ExpandUser(src))
 	if !lib.IsDir(src) {
 		fmt.Printf("目录不存在: %s\n", src)
@@ -36,30 +73,53 @@ func installPack(library, src string) int {
 		return 2
 	}
 	dest := filepath.Join(library, packName)
-	if lib.Exists(dest) || symlink.Target(dest) != "" {
-		fmt.Printf("库里已有包: %s\n", packName)
-		return 1
+	if code := refusePackLink(dest); code != 0 {
+		return code
 	}
-	if err := os.MkdirAll(library, 0o755); err != nil {
-		fmt.Println(err.Error())
-		return 1
-	}
-	var copyErr error
-	if kind == "single" {
-		if err := os.Mkdir(dest, 0o755); err != nil {
+	existed := lib.IsDir(dest)
+	if !existed {
+		if err := os.MkdirAll(library, 0o755); err != nil {
 			fmt.Println(err.Error())
 			return 1
 		}
-		copyErr = lib.CopyInstall(src, filepath.Join(dest, packName))
-	} else {
-		copyErr = lib.CopyInstall(src, dest)
-	}
-	if copyErr != nil {
-		if lib.Exists(dest) && symlink.Target(dest) == "" {
-			_ = lib.RemoveTree(dest)
+		var copyErr error
+		if kind == "single" {
+			if err := os.Mkdir(dest, 0o755); err != nil {
+				fmt.Println(err.Error())
+				return 1
+			}
+			copyErr = lib.CopyInstall(src, filepath.Join(dest, packName))
+		} else {
+			copyErr = lib.CopyInstall(src, dest)
 		}
-		fmt.Println(copyErr.Error())
-		return 1
+		if copyErr != nil {
+			if lib.Exists(dest) && symlink.Target(dest) == "" {
+				_ = lib.RemoveTree(dest)
+			}
+			fmt.Println(copyErr.Error())
+			return 1
+		}
+	}
+	if ref != "" {
+		if err := gitpack.CheckoutRef(dest, ref); err != nil {
+			fmt.Println(err.Error())
+			if !existed && lib.Exists(dest) && symlink.Target(dest) == "" {
+				_ = lib.RemoveTree(dest)
+			}
+			return 2
+		}
+	}
+	headline := "已安装"
+	if existed && ref == "" {
+		headline = "库里已有包"
+	} else if existed {
+		headline = "已检出"
+	}
+	if code := printInstalled(dest, packName, headline); code != 0 {
+		return code
+	}
+	if existed && ref == "" {
+		fmt.Println("跳过复制")
 	}
 	fallback := src
 	if gitRoot := gitpack.Root(dest); gitRoot != "" {
@@ -68,55 +128,75 @@ func installPack(library, src string) int {
 			fallback = srcMeta
 		}
 	}
-	if err := gitpack.WriteLock(library, map[string]string{packName: fallback}); err != nil {
-		fmt.Println(err.Error())
-		return 1
-	}
-	info, err := lib.Inspect(dest)
-	if err != nil {
-		fmt.Println(err.Error())
-		return 1
-	}
-	fmt.Printf("已安装 %s (%s)\n", packName, info.Kind)
-	for _, skill := range info.Skills {
-		fmt.Printf("  - %s\n", skill)
-	}
-	fmt.Printf("lock: %s\n", gitpack.LockPath(library))
-	return 0
+	return writeInstallLock(library, packName, fallback, unlock)
 }
 
-func removePack(library, packName string) int {
-	if !lib.ValidName(packName) {
-		fmt.Printf("非法包名: %s\n", packName)
+func installRemote(library, url, ref string, unlock bool) int {
+	packName, err := gitpack.NameFromURL(url)
+	if err != nil {
+		fmt.Println(err.Error())
 		return 2
 	}
 	dest := filepath.Join(library, packName)
-	if symlink.Target(dest) != "" {
-		fmt.Printf("拒绝删除链接: %s\n", dest)
-		return 2
+	if code := refusePackLink(dest); code != 0 {
+		return code
 	}
-	if !lib.IsDir(dest) {
-		fmt.Printf("库里没有包: %s\n", packName)
-		return 1
+	existed := lib.IsDir(dest)
+	if !existed {
+		if err := os.MkdirAll(library, 0o755); err != nil {
+			fmt.Println(err.Error())
+			return 1
+		}
+		if err := gitpack.Clone(url, dest, ref); err != nil {
+			fmt.Println(err.Error())
+			return 1
+		}
+		if _, err := lib.ClassifySource(dest); err != nil {
+			if lib.Exists(dest) && symlink.Target(dest) == "" {
+				_ = lib.RemoveTree(dest)
+			}
+			fmt.Println(err.Error())
+			return 1
+		}
+	} else if ref != "" {
+		if err := gitpack.CheckoutRef(dest, ref); err != nil {
+			fmt.Println(err.Error())
+			return 2
+		}
 	}
-	resolved := lib.Resolve(dest)
-	libraryResolved := lib.Resolve(library)
-	sep := string(os.PathSeparator)
-	if !strings.HasPrefix(resolved, libraryResolved+sep) {
-		fmt.Printf("拒绝删除库以外的路径: %s\n", dest)
-		return 2
+	headline := "已安装"
+	if existed && ref == "" {
+		headline = "库里已有包"
+	} else if existed {
+		headline = "已检出"
 	}
-	if err := lib.RemoveTree(dest); err != nil {
-		fmt.Println(err.Error())
-		return 1
+	if code := printInstalled(dest, packName, headline); code != 0 {
+		return code
 	}
-	if err := gitpack.WriteLock(library, nil); err != nil {
-		fmt.Println(err.Error())
-		return 1
+	if existed && ref == "" {
+		fmt.Println("跳过复制")
 	}
-	fmt.Printf("已从库中删除 %s\n", packName)
-	fmt.Println("仓库里的链接要再跑 link 才会去掉")
-	return 0
+	fallback := url
+	if gitRoot := gitpack.Root(dest); gitRoot != "" {
+		meta := gitpack.Metadata(gitRoot, fallback)
+		if srcMeta, ok := meta["source"]; ok {
+			fallback = srcMeta
+		}
+	}
+	return writeInstallLock(library, packName, fallback, unlock)
+}
+
+func installSpec(library, spec string, unlock bool) int {
+	url, ref := gitpack.ParseSpec(spec)
+	local := lib.ExpandUser(url)
+	if lib.IsDir(local) {
+		return installLocal(library, local, ref, unlock)
+	}
+	if gitpack.IsURL(spec) || ref != "" {
+		return installRemote(library, url, ref, unlock)
+	}
+	fmt.Printf("目录不存在: %s\n", lib.Resolve(local))
+	return 2
 }
 
 func loadConfigFile(path string) ([]string, error) {
@@ -277,6 +357,32 @@ func cmdList(library, packName string) int {
 	return 0
 }
 
+func printGlobalConfig() int {
+	path, err := lib.GlobalConfigPath()
+	if err != nil {
+		fmt.Println(err.Error())
+		return 2
+	}
+	fmt.Printf("全局配置: %s\n", path)
+	if !lib.IsFile(path) {
+		fmt.Println("未找到技能声明")
+		return 0
+	}
+	entries, err := loadConfigFile(path)
+	if err != nil {
+		fmt.Printf("配置无法读取: %s\n", err.Error())
+		return 2
+	}
+	if len(entries) == 0 {
+		fmt.Println("  （空）")
+		return 0
+	}
+	for _, entry := range entries {
+		fmt.Printf("  %s\n", entry)
+	}
+	return 0
+}
+
 func reportGlobal(library string, write bool) int {
 	path, err := lib.GlobalConfigPath()
 	if err != nil {
@@ -284,11 +390,9 @@ func reportGlobal(library string, write bool) int {
 		return 2
 	}
 	target, _ := lib.GlobalSkillsDir()
-	fmt.Println()
-	fmt.Printf("global 配置: %s\n", path)
-	fmt.Printf("global 目标: %s\n", target)
+	home, _ := lib.AgentHome()
+	fmt.Printf("全局工作区: %s\n", home)
 	if !lib.IsFile(path) {
-		fmt.Println("未找到 global skills.json")
 		return 0
 	}
 	entries, err := loadConfigFile(path)
@@ -297,19 +401,21 @@ func reportGlobal(library string, write bool) int {
 		return 2
 	}
 	desired, problems := link.Resolve(library, entries)
-	home, _ := lib.AgentHome()
 	return link.Apply(home, desired, problems, write, nil, target, false)
 }
 
 func cmdStatus(library string, roots []string) int {
-	printLibrary(library)
-	code := reportGlobal(library, false)
+	code := printGlobalConfig()
+	fmt.Println()
+	if next := reportGlobal(library, false); next > code {
+		code = next
+	}
 	for _, root := range roots {
 		fmt.Println()
 		resolved := lib.Resolve(root)
-		fmt.Printf("根目录: %s\n", resolved)
+		fmt.Printf("工作区: %s\n", filepath.Join(resolved, ".agents"))
 		config := filepath.Join(root, ".agents", lib.ConfigName)
-		fmt.Printf("配置: %s\n", config)
+		fmt.Printf("技能声明: %s\n", config)
 		entries, ok, err := loadSelection(root)
 		if err != nil {
 			fmt.Printf("配置无法读取: %s\n", err.Error())
@@ -333,7 +439,7 @@ func cmdStatus(library string, roots []string) int {
 	return code
 }
 
-func cmdLink(library string, roots []string) int {
+func cmdSync(library string, roots []string) int {
 	code := 0
 	for index, root := range roots {
 		if index > 0 {
@@ -354,7 +460,7 @@ func cmdLink(library string, roots []string) int {
 			continue
 		}
 		if !ok {
-			fmt.Println("未找到 .agents/skills.json。请写入字符串数组后再 link。")
+			fmt.Println("未找到 .agents/skills.json。请写入字符串数组后再 sync。")
 			code = 2
 			continue
 		}
@@ -371,7 +477,7 @@ func cmdLink(library string, roots []string) int {
 	return code
 }
 
-func cmdLinkGlobal(library string) int {
+func cmdSyncGlobal(library string) int {
 	path, err := lib.GlobalConfigPath()
 	if err != nil {
 		fmt.Println(err.Error())
@@ -407,33 +513,23 @@ func printProblems(problems []string) {
 	}
 }
 
-func resolveAddNames(library string, names []string) ([]string, int) {
-	var resolved []string
+func rejectRemoteSpecs(names []string) int {
 	for _, name := range names {
 		if gitpack.IsURL(name) {
-			url, ref := gitpack.ParseSpec(name)
-			packName, err := gitpack.Fetch(library, url, ref, "")
-			if err != nil {
-				fmt.Println(err.Error())
-				return nil, 1
-			}
-			fmt.Printf("已获取远程包 %s\n", packName)
-			resolved = append(resolved, packName)
-			continue
+			fmt.Printf("不接收 Git URL: %s\n请改用 install\n", name)
+			return 2
 		}
-		resolved = append(resolved, name)
 	}
-	return resolved, 0
+	return 0
 }
 
-func cmdAdd(library string, names []string, root string, useGlobal bool) int {
-	resolved, code := resolveAddNames(library, names)
-	if code != 0 {
+func validateNames(library string, names []string) int {
+	if code := rejectRemoteSpecs(names); code != 0 {
 		fmt.Println("未修改配置")
 		return code
 	}
 	var problems []string
-	for _, name := range resolved {
+	for _, name := range names {
 		_, more := link.Resolve(library, []string{name})
 		problems = append(problems, more...)
 	}
@@ -442,38 +538,51 @@ func cmdAdd(library string, names []string, root string, useGlobal bool) int {
 		fmt.Println("未修改配置")
 		return 1
 	}
-	var path, comment string
-	var existing []string
+	return 0
+}
+
+func selectionFile(root string, useGlobal bool) (string, string, []string, int) {
 	if useGlobal {
-		var err error
-		path, err = lib.GlobalConfigPath()
+		path, err := lib.GlobalConfigPath()
 		if err != nil {
 			fmt.Println(err.Error())
-			return 1
+			return "", "", nil, 1
 		}
-		comment = "// global 技能。运行 /skill-manager link --global。"
-		if lib.IsFile(path) {
-			existing, err = loadConfigFile(path)
-			if err != nil {
-				fmt.Println(err.Error())
-				return 1
-			}
+		comment := "// global 技能。运行 /skill-manager sync --global。"
+		if !lib.IsFile(path) {
+			return path, comment, nil, 0
 		}
-	} else {
-		if !lib.IsDir(root) {
-			fmt.Printf("根目录不存在: %s\n", root)
-			return 2
-		}
-		path = filepath.Join(root, ".agents", lib.ConfigName)
-		comment = "// 启用的技能包。包名加载整包，包名:技能名 只加载一个。运行 /skill-manager link。"
-		entries, ok, err := loadSelection(root)
+		existing, err := loadConfigFile(path)
 		if err != nil {
 			fmt.Println(err.Error())
-			return 1
+			return "", "", nil, 1
 		}
-		if ok {
-			existing = entries
-		}
+		return path, comment, existing, 0
+	}
+	if !lib.IsDir(root) {
+		fmt.Printf("根目录不存在: %s\n", root)
+		return "", "", nil, 2
+	}
+	path := filepath.Join(root, ".agents", lib.ConfigName)
+	comment := "// 启用的技能包。包名加载整包，包名:技能名 只加载一个。运行 /skill-manager sync。"
+	entries, ok, err := loadSelection(root)
+	if err != nil {
+		fmt.Println(err.Error())
+		return "", "", nil, 1
+	}
+	if !ok {
+		return path, comment, nil, 0
+	}
+	return path, comment, entries, 0
+}
+
+func cmdAdd(library string, names []string, root string, useGlobal bool) int {
+	if code := validateNames(library, names); code != 0 {
+		return code
+	}
+	path, comment, existing, code := selectionFile(root, useGlobal)
+	if code != 0 {
+		return code
 	}
 	current := append([]string{}, existing...)
 	seen := map[string]bool{}
@@ -481,7 +590,7 @@ func cmdAdd(library string, names []string, root string, useGlobal bool) int {
 		seen[lib.CaseFold(item)] = true
 	}
 	var added []string
-	for _, name := range resolved {
+	for _, name := range names {
 		if seen[lib.CaseFold(name)] {
 			fmt.Printf("已存在 %s\n", name)
 			continue
@@ -501,6 +610,53 @@ func cmdAdd(library string, names []string, root string, useGlobal bool) int {
 	}
 	for _, name := range added {
 		fmt.Printf("  + %s\n", name)
+	}
+	return 0
+}
+
+func cmdRemove(library string, names []string, root string, useGlobal bool) int {
+	if code := validateNames(library, names); code != 0 {
+		return code
+	}
+	path, comment, existing, code := selectionFile(root, useGlobal)
+	if code != 0 {
+		return code
+	}
+	present := map[string]bool{}
+	for _, item := range existing {
+		present[lib.CaseFold(item)] = true
+	}
+	drop := map[string]bool{}
+	var missing []string
+	for _, name := range names {
+		key := lib.CaseFold(name)
+		if !present[key] {
+			missing = append(missing, name)
+			continue
+		}
+		drop[key] = true
+	}
+	if len(missing) > 0 {
+		for _, name := range missing {
+			fmt.Printf("没有该条目 %s\n", name)
+		}
+		fmt.Println("未修改配置")
+		return 1
+	}
+	var kept []string
+	for _, item := range existing {
+		if drop[lib.CaseFold(item)] {
+			continue
+		}
+		kept = append(kept, item)
+	}
+	if err := writeSelection(path, kept, comment); err != nil {
+		fmt.Println(err.Error())
+		return 1
+	}
+	fmt.Printf("配置: %s\n", path)
+	for _, name := range names {
+		fmt.Printf("  - %s\n", name)
 	}
 	return 0
 }
@@ -569,14 +725,14 @@ func upgradePack(library, packName string) int {
 	return 0
 }
 
-func initSelectionEntries(library, skillsFolder string) ([]string, error) {
+func initSelectionEntries(library, skillsFolder string) ([]string, []string, error) {
 	libraryResolved := lib.Resolve(library)
 	byPack := map[string]map[string]bool{}
-	var realInstalls []string
+	var realInstalls []looseDir
 	if lib.IsDir(skillsFolder) {
 		entries, err := os.ReadDir(skillsFolder)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		names := make([]string, 0, len(entries))
 		for _, entry := range entries {
@@ -597,7 +753,7 @@ func initSelectionEntries(library, skillsFolder string) ([]string, error) {
 				rel, err := filepath.Rel(libraryResolved, resolvedTarget)
 				if err != nil || strings.HasPrefix(rel, "..") {
 					if lib.IsDir(resolvedTarget) {
-						realInstalls = append(realInstalls, resolvedTarget)
+						realInstalls = append(realInstalls, looseDir{src: resolvedTarget})
 					}
 					continue
 				}
@@ -613,26 +769,32 @@ func initSelectionEntries(library, skillsFolder string) ([]string, error) {
 				byPack[packName][skillKey] = true
 				continue
 			}
-			realInstalls = append(realInstalls, lib.Resolve(entryPath))
+			realInstalls = append(realInstalls, looseDir{src: lib.Resolve(entryPath), replace: entryPath})
 		}
 	}
-	for _, src := range realInstalls {
-		if !lib.IsDir(src) {
+	var replace []string
+	for _, item := range realInstalls {
+		if !lib.IsDir(item.src) {
 			continue
 		}
-		if _, err := lib.ClassifySource(src); err != nil {
+		if _, err := lib.ClassifySource(item.src); err != nil {
 			continue
 		}
-		packName := filepath.Base(src)
+		packName := filepath.Base(item.src)
 		if !lib.ValidName(packName) {
 			continue
 		}
 		dest := filepath.Join(library, packName)
-		if !lib.Exists(dest) && symlink.Target(dest) == "" {
-			installPack(library, src)
+		if !lib.IsDir(dest) && symlink.Target(dest) == "" {
+			if code := installLocal(library, item.src, "", false); code != 0 {
+				return nil, nil, fmt.Errorf("未能收进技能库: %s", packName)
+			}
 		}
 		if byPack[packName] == nil {
 			byPack[packName] = map[string]bool{}
+		}
+		if item.replace != "" {
+			replace = append(replace, item.replace)
 		}
 	}
 	packNames := make([]string, 0, len(byPack))
@@ -648,7 +810,7 @@ func initSelectionEntries(library, skillsFolder string) ([]string, error) {
 		}
 		info, err := lib.Inspect(pack)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		linked := byPack[packName]
 		if info.Kind == "mixed" {
@@ -683,7 +845,12 @@ func initSelectionEntries(library, skillsFolder string) ([]string, error) {
 		}
 		entries = append(entries, packName)
 	}
-	return entries, nil
+	return entries, replace, nil
+}
+
+type looseDir struct {
+	src     string
+	replace string
 }
 
 func cmdInit(library string) int {
@@ -694,7 +861,7 @@ func cmdInit(library string) int {
 	}
 	fmt.Printf("init global: %s\n", skillsFolder)
 	fmt.Printf("库: %s\n", library)
-	entries, err := initSelectionEntries(library, skillsFolder)
+	entries, replace, err := initSelectionEntries(library, skillsFolder)
 	if err != nil {
 		fmt.Println(err.Error())
 		return 1
@@ -704,7 +871,7 @@ func cmdInit(library string) int {
 		fmt.Println(err.Error())
 		return 1
 	}
-	comment := "// global 技能。运行 /skill-manager link --global。"
+	comment := "// global 技能。运行 /skill-manager sync --global。"
 	if err := writeSelection(path, entries, comment); err != nil {
 		fmt.Println(err.Error())
 		return 1
@@ -718,7 +885,13 @@ func cmdInit(library string) int {
 		return 1
 	}
 	fmt.Printf("lock: %s\n", gitpack.LockPath(library))
-	return cmdLinkGlobal(library)
+	for _, dir := range replace {
+		if err := lib.RemoveTree(dir); err != nil {
+			fmt.Println(err.Error())
+			return 1
+		}
+	}
+	return cmdSyncGlobal(library)
 }
 
 func decodeLockPacks(path string) (map[string]any, error) {
@@ -739,10 +912,6 @@ func Main(argv []string) int {
 	var rest []string
 	for i := 0; i < len(argv); i++ {
 		arg := argv[i]
-		if arg == "-h" || arg == "--help" {
-			printHelp()
-			return 0
-		}
 		if arg == "--library" {
 			if i+1 >= len(argv) {
 				fmt.Fprintln(os.Stderr, "缺少 --library 的值")
@@ -768,19 +937,29 @@ func Main(argv []string) int {
 	}
 	cmd := rest[0]
 	args := rest[1:]
+	if cmd == "-h" || cmd == "--help" {
+		printHelp()
+		return 0
+	}
+	if wantsHelp(args) {
+		return printCommandHelp(cmd)
+	}
 	switch cmd {
 	case "install":
-		if len(args) != 1 {
-			fmt.Fprintln(os.Stderr, "install 需要一个目录")
-			return 2
+		unlock, spec, errCode := parseInstall(args)
+		if errCode != 0 {
+			return errCode
 		}
-		return installPack(library, args[0])
+		return installSpec(library, spec, unlock)
 	case "remove":
-		if len(args) != 1 {
-			fmt.Fprintln(os.Stderr, "remove 需要一个包名")
-			return 2
+		names, root, global, errCode := parseSelection(args)
+		if errCode != 0 {
+			return errCode
 		}
-		return removePack(library, args[0])
+		if root == "" {
+			root = getwd()
+		}
+		return cmdRemove(library, names, root, global)
 	case "lock":
 		return cmdLock(library)
 	case "list":
@@ -792,23 +971,23 @@ func Main(argv []string) int {
 			return 2
 		}
 		return cmdList(library, name)
-	case "link":
+	case "sync":
 		roots, global, errCode := parseRoots(args, true)
 		if errCode != 0 {
 			return errCode
 		}
 		if global {
 			if len(roots) > 0 {
-				fmt.Println("link --global 不使用 --root")
+				fmt.Println("sync --global 不使用 --root")
 			}
-			return cmdLinkGlobal(library)
+			return cmdSyncGlobal(library)
 		}
 		if len(roots) == 0 {
 			roots = []string{getwd()}
 		}
-		return cmdLink(library, roots)
+		return cmdSync(library, roots)
 	case "add":
-		names, root, global, errCode := parseAdd(args)
+		names, root, global, errCode := parseSelection(args)
 		if errCode != 0 {
 			return errCode
 		}
@@ -865,7 +1044,29 @@ func parseRoots(args []string, allowGlobal bool) ([]string, bool, int) {
 	return roots, global, 0
 }
 
-func parseAdd(args []string) ([]string, string, bool, int) {
+func parseInstall(args []string) (bool, string, int) {
+	unlock := false
+	var specs []string
+	for _, arg := range args {
+		switch arg {
+		case "--unlock":
+			unlock = true
+		default:
+			if strings.HasPrefix(arg, "-") {
+				fmt.Fprintf(os.Stderr, "无法识别的参数: %s\n", arg)
+				return false, "", 2
+			}
+			specs = append(specs, arg)
+		}
+	}
+	if len(specs) != 1 {
+		fmt.Fprintln(os.Stderr, "install 需要一个目录或 Git URL")
+		return false, "", 2
+	}
+	return unlock, specs[0], 0
+}
+
+func parseSelection(args []string) ([]string, string, bool, int) {
 	var names []string
 	root := ""
 	global := false
@@ -889,7 +1090,7 @@ func parseAdd(args []string) ([]string, string, bool, int) {
 		}
 	}
 	if len(names) == 0 {
-		fmt.Fprintln(os.Stderr, "add 至少需要一个包名或 Git URL")
+		fmt.Fprintln(os.Stderr, "至少需要一个包名或包名:技能名")
 		return nil, "", false, 2
 	}
 	return names, root, global, 0
@@ -903,20 +1104,118 @@ func getwd() string {
 	return wd
 }
 
-func printHelp() {
-	fmt.Println(`管理 skill 库与仓库链接
+func wantsHelp(args []string) bool {
+	for _, arg := range args {
+		if arg == "-h" || arg == "--help" {
+			return true
+		}
+	}
+	return false
+}
 
-用法:
-  skill-manager [--library 路径] [命令]
+func printHelp() {
+	fmt.Println(`用法:
+  skill-manager [--library <路径>] <命令>
 
 命令:
-  install 路径     把本机目录装进 skill 库
-  remove 包名      从 skill 库删除一个包
-  lock            按磁盘重写 .skill-lock.json
-  list [包名]      列出包；指定包名时列出包内技能
-  link            按仓库配置链接技能
-  add             把技能写入 skills.json，不创建链接
-  status          只查看，不修改
-  upgrade 包名     从 origin 默认分支拉取 git 包
-  init            将 global ~/.agents/skills 迁入 skill-library 并 link`)
+  init      初始化技能管理体系
+  list      查看当前技能库
+  install   安装技能到技能库
+  upgrade   更新技能库中的技能
+  lock      锁定技能库信息
+  status    查看全局配置, 全局工作区, 工作区技能状态
+  add       添加技能声明
+  remove    移除技能声明
+  sync      按技能声明同步技能`)
+}
+
+func printCommandHelp(cmd string) int {
+	text, ok := commandHelp[cmd]
+	if !ok {
+		fmt.Fprintf(os.Stderr, "未知命令: %s\n", cmd)
+		return 2
+	}
+	fmt.Println(text)
+	return 0
+}
+
+var commandHelp = map[string]string{
+	"init": `初始化技能管理体系
+
+扫描全局工作区里已有的技能，收进技能库，写好技能声明，再链回全局工作区。库里已有同名包时不覆盖技能库，链接指向库里原来的包。
+
+用法:
+  skill-manager init`,
+	"list": `查看当前技能库
+
+列出技能库里的包。写出包名时，列出该包里的技能。
+
+用法:
+  skill-manager list [包名]`,
+	"install": `安装技能到技能库
+
+把本机目录或 Git URL 装进技能库，并锁定技能库信息。库里已有该包时不覆盖文件。没带 #ref 则不切换提交。带了 #ref 则先 fetch 再 checkout；不干净或失败则失败，不锁定，也不删已有目录。
+
+用法:
+  skill-manager install [--unlock] <本机目录或 Git URL[#ref]>
+
+--unlock
+  跳过锁定。带 #ref 时检出仍然做。`,
+	"upgrade": `更新技能库中的技能
+
+把技能库里的 git 包更新到 origin 的默认分支，并锁定技能库信息。
+
+用法:
+  skill-manager upgrade <包名>`,
+	"lock": `锁定技能库信息
+
+按磁盘写下技能库索引。
+
+用法:
+  skill-manager lock`,
+	"status": `查看全局配置, 全局工作区, 工作区技能状态
+
+按这个顺序查看：全局配置，全局工作区，指定工作区的技能状态。
+
+用法:
+  skill-manager status [--root <工作区>]...
+
+--root <工作区>
+  查看该工作区的技能状态。可重复。不写则用当前目录。不接受 --global。`,
+	"add": `添加技能声明
+
+向指定工作区的技能声明中添加技能。技能须已在技能库中。可写多个；有一条不合法则全部不写。不创建链接。
+
+用法:
+  skill-manager add [--root <工作区>] [--global] <包名或包名:技能名>...
+
+--root <工作区>
+  写入该工作区的技能声明。不写则用当前目录。
+
+--global
+  写入全局工作区的技能声明。与 --root 同时出现时以全局工作区为准。`,
+	"remove": `移除技能声明
+
+从指定工作区的技能声明中移除技能。不连带删掉「包名:技能名」。技能须已在技能库中。可写多个；有一条对不上或不合法则全部不改。不删技能库里的包，也不改链接。
+
+用法:
+  skill-manager remove [--root <工作区>] [--global] <包名或包名:技能名>...
+
+--root <工作区>
+  从该工作区的技能声明中移除。不写则用当前目录。
+
+--global
+  从全局工作区的技能声明中移除。与 --root 同时出现时以全局工作区为准。`,
+	"sync": `按技能声明同步技能
+
+按指定工作区的技能声明，把技能库中的技能链到该工作区。技能声明不存在则失败，不建链接。
+
+用法:
+  skill-manager sync [--root <工作区>]... [--global]
+
+--root <工作区>
+  按该工作区的技能声明同步技能。可重复。不写则用当前目录。
+
+--global
+  按全局工作区的技能声明同步技能。与 --root 同时出现时以全局工作区为准。`,
 }
