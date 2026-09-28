@@ -1,0 +1,467 @@
+package tests
+
+import (
+	"bytes"
+	"encoding/json"
+	"io"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"testing"
+
+	"github.com/swxs/skill-manager/internal/cli"
+	"github.com/swxs/skill-manager/internal/gitpack"
+	"github.com/swxs/skill-manager/internal/jsonc"
+	lib "github.com/swxs/skill-manager/internal/library"
+	"github.com/swxs/skill-manager/internal/link"
+	"github.com/swxs/skill-manager/internal/symlink"
+)
+
+func writeSkill(t *testing.T, dir string) {
+	t.Helper()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	text := "---\nname: " + filepath.Base(dir) + "\n---\n"
+	if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte(text), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func withHome(t *testing.T) (root, home, library string) {
+	t.Helper()
+	root = t.TempDir()
+	user := filepath.Join(root, "user")
+	home = filepath.Join(user, ".agents")
+	library = filepath.Join(root, "library")
+	if err := os.MkdirAll(home, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", user)
+	t.Setenv("USERPROFILE", user)
+	return root, home, library
+}
+
+func runCLI(t *testing.T, library string, args ...string) (int, string) {
+	t.Helper()
+	old := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout = w
+	code := cli.Main(append([]string{"--library", library}, args...))
+	_ = w.Close()
+	os.Stdout = old
+	var buf bytes.Buffer
+	_, _ = io.Copy(&buf, r)
+	_ = r.Close()
+	return code, buf.String()
+}
+
+func git(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git %v: %v\n%s", args, err, out)
+	}
+}
+
+func TestParseJSONCKeepsCommentMarkersInsideStrings(t *testing.T) {
+	text := `
+        // 行注释
+        [
+          "keep // inside",
+          "keep, comma",
+          /* 块
+             注释 */
+          "tail",
+        ]
+        `
+	got, err := jsonc.Parse(text)
+	if err != nil {
+		t.Fatal(err)
+	}
+	items, ok := got.([]any)
+	if !ok || len(items) != 3 || items[0] != "keep // inside" || items[1] != "keep, comma" || items[2] != "tail" {
+		t.Fatalf("%#v", got)
+	}
+}
+
+func TestStripTrailingCommasKeepsCommasInsideStrings(t *testing.T) {
+	got := jsonc.StripTrailingCommas("[\"a,b\", {\"k\": \"x,\",},]\n")
+	want := "[\"a,b\", {\"k\": \"x,\"}]\n"
+	if got != want {
+		t.Fatalf("got %q want %q", got, want)
+	}
+}
+
+func TestClassifySource(t *testing.T) {
+	root, _, _ := withHome(t)
+	single := filepath.Join(root, "single")
+	writeSkill(t, single)
+	pack := filepath.Join(root, "pack")
+	writeSkill(t, filepath.Join(pack, "alpha"))
+	writeSkill(t, filepath.Join(pack, "beta"))
+	mixed := filepath.Join(root, "mixed")
+	writeSkill(t, mixed)
+	writeSkill(t, filepath.Join(mixed, "child"))
+	if kind, _ := lib.ClassifySource(single); kind != "single" {
+		t.Fatal(kind)
+	}
+	if kind, _ := lib.ClassifySource(pack); kind != "pack" {
+		t.Fatal(kind)
+	}
+	if kind, _ := lib.ClassifySource(mixed); kind != "mixed" {
+		t.Fatal(kind)
+	}
+}
+
+func TestClassifySourceRejectsMissingAndSkipsHidden(t *testing.T) {
+	root, _, _ := withHome(t)
+	empty := filepath.Join(root, "empty")
+	if err := os.Mkdir(empty, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	hidden := filepath.Join(root, "hidden")
+	writeSkill(t, filepath.Join(hidden, ".secret"))
+	visible := filepath.Join(root, "visible")
+	writeSkill(t, filepath.Join(visible, "shown"))
+	writeSkill(t, filepath.Join(visible, ".secret"))
+	if _, err := lib.ClassifySource(empty); err == nil || !bytes.Contains([]byte(err.Error()), []byte("没有 SKILL.md")) {
+		t.Fatal(err)
+	}
+	if _, err := lib.ClassifySource(hidden); err == nil || !bytes.Contains([]byte(err.Error()), []byte("没有 SKILL.md")) {
+		t.Fatal(err)
+	}
+	if kind, err := lib.ClassifySource(visible); err != nil || kind != "pack" {
+		t.Fatal(kind, err)
+	}
+	names, _, err := lib.DirectMembers(visible)
+	if err != nil || len(names) != 1 || names[0] != "shown" {
+		t.Fatal(names, err)
+	}
+}
+
+func TestDirectMembersSortByCasefold(t *testing.T) {
+	root, _, _ := withHome(t)
+	pack := filepath.Join(root, "sorted")
+	for _, name := range []string{"b", "A", "c"} {
+		writeSkill(t, filepath.Join(pack, name))
+	}
+	names, _, err := lib.DirectMembers(pack)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stringsJoin(names) != "A,b,c" {
+		t.Fatal(names)
+	}
+	info, err := lib.Inspect(pack)
+	if err != nil || stringsJoin(info.Skills) != "A,b,c" {
+		t.Fatal(info.Skills, err)
+	}
+}
+
+func stringsJoin(items []string) string {
+	return joinComma(items)
+}
+
+func joinComma(items []string) string {
+	out := ""
+	for i, item := range items {
+		if i > 0 {
+			out += ","
+		}
+		out += item
+	}
+	return out
+}
+
+func TestResolveSelectionReportsMissing(t *testing.T) {
+	_, _, library := withHome(t)
+	writeSkill(t, filepath.Join(library, "demo", "one"))
+	missing, problems := link.Resolve(library, []string{"nope"})
+	if len(missing) != 0 || stringsJoin(problems) != "! 库中没有包 nope" {
+		t.Fatal(problems)
+	}
+	_, problems = link.Resolve(library, []string{"demo:missing"})
+	if stringsJoin(problems) != "! 包 demo 里没有技能 missing" {
+		t.Fatal(problems)
+	}
+}
+
+func TestMissingPackHintOnAdd(t *testing.T) {
+	_, home, library := withHome(t)
+	_, output := runCLI(t, library, "add", "--global", "missing-pack")
+	if !bytes.Contains([]byte(output), []byte("! 库中没有包 missing-pack")) || !bytes.Contains([]byte(output), []byte("Git 仓库 URL")) {
+		t.Fatal(output)
+	}
+	if _, err := os.Stat(filepath.Join(home, "skills.json")); !os.IsNotExist(err) {
+		t.Fatal("skills.json should not exist", err)
+	}
+}
+
+func TestResolveSelectionRejectsSplittingMixed(t *testing.T) {
+	_, _, library := withHome(t)
+	mixed := filepath.Join(library, "mix")
+	writeSkill(t, mixed)
+	writeSkill(t, filepath.Join(mixed, "child"))
+	desired, problems := link.Resolve(library, []string{"mix:child"})
+	if len(desired) != 0 || stringsJoin(problems) != "! 混合包不能单拆 mix:child" {
+		t.Fatal(problems)
+	}
+}
+
+func TestResolveSelectionSkipsSameName(t *testing.T) {
+	_, _, library := withHome(t)
+	writeSkill(t, filepath.Join(library, "pack-a", "shared"))
+	writeSkill(t, filepath.Join(library, "pack-b", "shared"))
+	desired, problems := link.Resolve(library, []string{"pack-a", "pack-b"})
+	if len(desired) != 1 || desired["shared"] == "" {
+		t.Fatal(desired)
+	}
+	if stringsJoin(problems) != "! 同名跳过 pack-b:shared（已占用 shared）" {
+		t.Fatal(problems)
+	}
+}
+
+func TestResolveSelectionExpandsPurePack(t *testing.T) {
+	_, _, library := withHome(t)
+	writeSkill(t, filepath.Join(library, "demo", "one"))
+	writeSkill(t, filepath.Join(library, "demo", "two"))
+	desired, problems := link.Resolve(library, []string{"demo"})
+	if len(problems) != 0 {
+		t.Fatal(problems)
+	}
+	if desired["one"] == "" || desired["two"] == "" || len(desired) != 2 {
+		t.Fatal(desired)
+	}
+}
+
+func TestGlobalConfigPathFollowsHome(t *testing.T) {
+	_, home, _ := withHome(t)
+	got, err := lib.GlobalConfigPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != filepath.Join(home, "skills.json") {
+		t.Fatalf("got %s", got)
+	}
+}
+
+func TestInstallAddLinkStatusRemoveAndLF(t *testing.T) {
+	root, _, library := withHome(t)
+	source := filepath.Join(root, "sources", "demo")
+	writeSkill(t, filepath.Join(source, "one"))
+	writeSkill(t, filepath.Join(source, "two"))
+	for _, rel := range []string{".git/config", "__pycache__/x.pyc", ".venv/pyvenv.cfg", "node_modules/pkg/index.js"} {
+		path := filepath.Join(source, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("noise"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_ = os.WriteFile(filepath.Join(source, ".DS_Store"), []byte("noise"), 0o644)
+	_ = os.WriteFile(filepath.Join(source, ".skill-lock.json"), []byte("{}\n"), 0o644)
+
+	if code, output := runCLI(t, library, "install", source); code != 0 {
+		t.Fatal(output)
+	}
+	installed := filepath.Join(library, "demo")
+	for _, name := range []string{"__pycache__", ".venv", "node_modules", ".DS_Store", ".skill-lock.json"} {
+		if _, err := os.Stat(filepath.Join(installed, name)); !os.IsNotExist(err) {
+			t.Fatal(name, err)
+		}
+	}
+	lockBytes, err := os.ReadFile(filepath.Join(library, ".skill-lock.json"))
+	if err != nil || bytes.Contains(lockBytes, []byte("\r")) || !bytes.HasSuffix(lockBytes, []byte("\n")) {
+		t.Fatal(err, lockBytes)
+	}
+	repo := filepath.Join(root, "repo")
+	if err := os.Mkdir(repo, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	git(t, repo, "init", "-q")
+	if code, output := runCLI(t, library, "add", "--root", repo, "demo"); code != 0 {
+		t.Fatal(output)
+	}
+	selection := filepath.Join(repo, ".agents", "skills.json")
+	raw, err := os.ReadFile(selection)
+	if err != nil || bytes.Contains(raw, []byte("\r")) {
+		t.Fatal(err, raw)
+	}
+	got, err := jsonc.Parse(string(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	items := got.([]any)
+	if len(items) != 1 || items[0] != "demo" {
+		t.Fatal(got)
+	}
+	if code, output := runCLI(t, library, "link", "--root", repo); code != 0 {
+		t.Fatal(output)
+	}
+	if symlink.Target(filepath.Join(repo, ".agents", "skills", "one")) == "" || symlink.Target(filepath.Join(repo, ".agents", "skills", "two")) == "" {
+		t.Fatal("links missing")
+	}
+	exclude, err := os.ReadFile(filepath.Join(repo, ".git", "info", "exclude"))
+	if err != nil || bytes.Contains(exclude, []byte("\r")) || !bytes.Contains(exclude, []byte(".agents/skills/one")) || !bytes.Contains(exclude, []byte(".agents/skills/two")) {
+		t.Fatal(err, string(exclude))
+	}
+	if code, output := runCLI(t, library, "status", "--root", repo); code != 0 || !bytes.Contains([]byte(output), []byte("已与配置一致")) {
+		t.Fatal(code, output)
+	}
+	if code, output := runCLI(t, library, "remove", "demo"); code != 0 {
+		t.Fatal(output)
+	}
+	if _, err := os.Stat(installed); !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+	lockText, _ := os.ReadFile(filepath.Join(library, ".skill-lock.json"))
+	var lock map[string]any
+	if err := json.Unmarshal(lockText, &lock); err != nil {
+		t.Fatal(err)
+	}
+	packs := lock["packs"].(map[string]any)
+	if len(packs) != 0 {
+		t.Fatal(packs)
+	}
+}
+
+func TestAddGlobalWritesSkillsJSONUnderHome(t *testing.T) {
+	root, home, library := withHome(t)
+	source := filepath.Join(root, "sources", "demo")
+	writeSkill(t, filepath.Join(source, "one"))
+	if code, output := runCLI(t, library, "install", source); code != 0 {
+		t.Fatal(output)
+	}
+	if code, output := runCLI(t, library, "add", "--global", "demo"); code != 0 {
+		t.Fatal(output)
+	}
+	path := filepath.Join(home, "skills.json")
+	raw, err := os.ReadFile(path)
+	if err != nil || bytes.Contains(raw, []byte("\r")) {
+		t.Fatal(err, raw)
+	}
+	if _, err := os.Stat(filepath.Join(home, "skills", "skill-manager", "skills.json")); !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+	got, err := jsonc.Parse(string(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	items := got.([]any)
+	if len(items) != 1 || items[0] != "demo" {
+		t.Fatal(got)
+	}
+}
+
+func TestInstallKeepsGitAndLockMetadata(t *testing.T) {
+	root, _, library := withHome(t)
+	source := filepath.Join(root, "sources", "demo")
+	writeSkill(t, filepath.Join(source, "one"))
+	writeSkill(t, filepath.Join(source, "two"))
+	git(t, source, "init", "-q")
+	git(t, source, "config", "user.email", "t@example.com")
+	git(t, source, "config", "user.name", "t")
+	git(t, source, "add", ".")
+	git(t, source, "commit", "-m", "init")
+	git(t, source, "branch", "-M", "main")
+	git(t, source, "remote", "add", "origin", "https://example.com/demo.git")
+	if code, output := runCLI(t, library, "install", source); code != 0 {
+		t.Fatal(output)
+	}
+	if !lib.IsDir(filepath.Join(library, "demo", ".git")) {
+		t.Fatal("missing .git")
+	}
+	text, err := os.ReadFile(filepath.Join(library, ".skill-lock.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var lock map[string]any
+	if err := json.Unmarshal(text, &lock); err != nil {
+		t.Fatal(err)
+	}
+	pack := lock["packs"].(map[string]any)["demo"].(map[string]any)
+	if pack["source"] != "https://example.com/demo.git" || pack["revision"] == "" || pack["ref"] != "main" {
+		t.Fatal(pack)
+	}
+}
+
+func TestAddGitURLFetchesThenWritesConfig(t *testing.T) {
+	root, _, library := withHome(t)
+	upstream := filepath.Join(root, "upstream")
+	writeSkill(t, filepath.Join(upstream, "alpha"))
+	git(t, upstream, "init", "-q")
+	git(t, upstream, "config", "user.email", "t@example.com")
+	git(t, upstream, "config", "user.name", "t")
+	git(t, upstream, "add", ".")
+	git(t, upstream, "commit", "-m", "init")
+	git(t, upstream, "branch", "-M", "main")
+	repo := filepath.Join(root, "repo")
+	if err := os.Mkdir(repo, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	code, output := runCLI(t, library, "add", "--root", repo, upstream)
+	if code != 0 {
+		t.Fatal(output)
+	}
+	if !lib.IsDir(filepath.Join(library, "upstream")) {
+		t.Fatal("missing upstream")
+	}
+	raw, err := os.ReadFile(filepath.Join(repo, ".agents", "skills.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := jsonc.Parse(string(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	items := got.([]any)
+	if len(items) != 1 || items[0] != "upstream" {
+		t.Fatal(got)
+	}
+}
+
+func TestInitGroupsGlobalLinksIntoPackEntry(t *testing.T) {
+	_, home, library := withHome(t)
+	writeSkill(t, filepath.Join(library, "demo", "one"))
+	writeSkill(t, filepath.Join(library, "demo", "two"))
+	if err := gitpack.WriteLock(library, nil); err != nil {
+		t.Fatal(err)
+	}
+	skillsHome := filepath.Join(home, "skills")
+	if err := os.MkdirAll(skillsHome, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"one", "two"} {
+		if _, err := symlink.Create(filepath.Join(skillsHome, name), filepath.Join(library, "demo", name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Mkdir(filepath.Join(skillsHome, "skill-manager"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	code, output := runCLI(t, library, "init")
+	if code != 0 {
+		t.Fatal(output)
+	}
+	raw, err := os.ReadFile(filepath.Join(home, "skills.json"))
+	if err != nil {
+		t.Fatal(err, output)
+	}
+	got, err := jsonc.Parse(string(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	items := got.([]any)
+	if len(items) != 1 || items[0] != "demo" {
+		t.Fatal(got, output)
+	}
+	if symlink.Target(filepath.Join(skillsHome, "one")) == "" {
+		t.Fatal("link missing", output)
+	}
+}

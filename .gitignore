@@ -4,3 +4,9 @@ node_modules/
 __pycache__/
 *.pyc
 .venv/
+
+/runtime/
+/dist/
+
+.scratch/*
+!.scratch/README.md

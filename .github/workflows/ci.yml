@@ -6,17 +6,17 @@ on:
 
 jobs:
   test:
-    name: tests (${{ matrix.os }}, py${{ matrix.python-version }})
+    name: tests (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
-        python-version: ["3.9", "3.13"]
     steps:
       - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/setup-go@v5
         with:
-          python-version: ${{ matrix.python-version }}
+          go-version-file: src/go.mod
       - name: Run tests
-        run: uv run python -m unittest discover -s tests -v
+        working-directory: src
+        run: go test ./...

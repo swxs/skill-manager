@@ -1,5 +1,9 @@
 # 变更记录
 
+## [0.3.0] - 未发布
+
+- 运行时改为 Go，安装不再需要 Python / uv
+
 ## [0.2.0] - 未发布
 
 - `add` 支持 Git URL（及本机 git 目录、可选 `#ref`）：先 fetch 进 skill-library，再写 skills.json；失败不改配置

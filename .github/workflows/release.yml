@@ -1,0 +1,109 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check tag
+        id: tag
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          if [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$ ]]; then
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+            echo "ver=${tag#v}" >> "$GITHUB_OUTPUT"
+          else
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+            echo "Skip tag $tag"
+          fi
+      - uses: actions/setup-go@v5
+        if: steps.tag.outputs.ok == 'true'
+        with:
+          go-version-file: src/go.mod
+      - name: Build skill zips
+        if: steps.tag.outputs.ok == 'true'
+        run: |
+          set -euo pipefail
+          root="$PWD"
+          mkdir -p dist/bin dist/zips
+          for pair in windows/amd64 windows/arm64 darwin/amd64 darwin/arm64 linux/amd64 linux/arm64; do
+            os="${pair%/*}"
+            arch="${pair#*/}"
+            ext=""
+            if [ "$os" = "windows" ]; then
+              ext=".exe"
+            fi
+            name="skill-manager-${os}-${arch}${ext}"
+            (
+              cd src
+              CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" go build -o "$root/dist/bin/$name" ./cmd/skill-manager
+            )
+          done
+          (
+            cd dist/bin
+            sha256sum skill-manager-windows-amd64.exe \
+              skill-manager-windows-arm64.exe \
+              skill-manager-darwin-amd64 \
+              skill-manager-darwin-arm64 \
+              skill-manager-linux-amd64 \
+              skill-manager-linux-arm64 \
+              > "$root/dist/checksums.txt"
+          )
+          for pair in windows/amd64 windows/arm64 darwin/amd64 darwin/arm64 linux/amd64 linux/arm64; do
+            os="${pair%/*}"
+            arch="${pair#*/}"
+            ext=""
+            if [ "$os" = "windows" ]; then
+              ext=".exe"
+            fi
+            name="skill-manager-${os}-${arch}${ext}"
+            stage=$(mktemp -d)
+            cp SKILL.md "$stage/SKILL.md"
+            mkdir -p "$stage/scripts" "$stage/runtime"
+            cp scripts/skill-manager scripts/skill-manager.ps1 "$stage/scripts/"
+            chmod +x "$stage/scripts/skill-manager"
+            cp "dist/bin/$name" "$stage/runtime/$name"
+            (
+              cd "$stage"
+              zip -r "$root/dist/zips/skill-manager-${os}-${arch}.zip" .
+            )
+            rm -rf "$stage"
+          done
+      - name: Release notes
+        if: steps.tag.outputs.ok == 'true'
+        run: |
+          set -euo pipefail
+          ver="${{ steps.tag.outputs.ver }}"
+          ver=$(printf '%s' "$ver" | sed 's/[.[\*^$()+?{|]/\\&/g')
+          awk -v ver="$ver" '
+            $0 ~ "^## \\[" ver "\\]" { found = 1; print; next }
+            found && /^## / { exit }
+            found { print }
+          ' CHANGELOG.md > notes.md
+          if ! grep -q . notes.md; then
+            echo "CHANGELOG.md 没有 [$ver]" >&2
+            exit 1
+          fi
+      - name: Publish
+        if: steps.tag.outputs.ok == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --title "$GITHUB_REF_NAME" \
+            --notes-file notes.md \
+            dist/zips/skill-manager-windows-amd64.zip \
+            dist/zips/skill-manager-windows-arm64.zip \
+            dist/zips/skill-manager-darwin-amd64.zip \
+            dist/zips/skill-manager-darwin-arm64.zip \
+            dist/zips/skill-manager-linux-amd64.zip \
+            dist/zips/skill-manager-linux-arm64.zip \
+            dist/checksums.txt

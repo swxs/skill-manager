@@ -2,7 +2,7 @@
 
 把本机技能目录装进 `~/.agents/skill-library`，再按配置链到当前仓库的 `.agents/skills`，或链到用户级 `~/.agents/skills`。
 
-这个仓库是公开的 skill 包。安装方式固定为克隆到 `~/.agents/skills/skill-manager`，这样技能正文里的脚本路径才成立。
+这个仓库是公开的 skill 包。装到 `~/.agents/skills/skill-manager`，技能正文里的脚本路径才成立。可以下载对应平台的完整压缩包并解压到这个目录，也可以把仓库克隆到同一路径。
 
 ## 做什么
 
@@ -20,15 +20,17 @@
 
 ## 依赖与平台
 
-脚本只使用 Python 标准库，没有第三方依赖。Python 3.9 及以上即可。
+运行时是静态的 Go 单文件，不需要本机安装 Python 或 uv。承诺支持 Windows、macOS 与 Linux，各有 amd64 与 arm64。持续集成在 Ubuntu 与 Windows 上跑 `go test`。
 
-推荐用 `uv run python` 运行。`uv` 会自备解释器，不要求系统里已经装好 Python。
-
-承诺支持 Windows、macOS 与 Linux。持续集成在 Ubuntu 与 Windows 上用 Python 3.9 和 3.13 跑测试。
+二进制没有签名。macOS 上启动脚本会在核对通过后去掉隔离属性。Windows 首次运行可能被 SmartScreen 拦截，需要选择仍要运行。
 
 ## 安装
 
-把仓库克隆到下面这个固定路径。需要 Gitee 镜像时，把克隆地址换成对应的 Gitee 仓库即可，目录不要变。
+目标目录都是 `~/.agents/skills/skill-manager`。
+
+下载 [GitHub Release](https://github.com/swxs/skill-manager/releases) 里当前平台的 zip，解压到这个目录。压缩包里已经有 `SKILL.md`、两条启动脚本，以及 `runtime/` 下的运行时，解压后即可使用。
+
+或者把仓库克隆到同一路径。仓库里没有运行时。第一次执行启动脚本时，脚本读取 `SKILL.md` 里的 `version`，下载该版本的平台 zip，解压并取出运行时，再用 `checksums.txt` 核对这个运行时文件。对不上就不执行。
 
 macOS / Linux：
 
@@ -44,9 +46,21 @@ New-Item -ItemType Directory -Force -Path "$env:USERPROFILE\.agents\skills"
 git clone https://github.com/swxs/skill-manager.git "$env:USERPROFILE\.agents\skills\skill-manager"
 ```
 
+换版本时，zip 安装是覆盖整个目录。clone 安装是改 `SKILL.md` 的 `version`，删掉 `runtime/`，下次启动再下载。`runtime/` 里已有与当前 `version` 一起装上的运行时时，不会重新下载。
+
 ## 命令
 
-在技能目录里执行。下面用 `uv run python scripts/skill_manager.py` 表示；装好之后也可以写成 `uv run python ~/.agents/skills/skill-manager/scripts/skill_manager.py`。
+Windows：
+
+```powershell
+powershell -NoProfile -File "$env:USERPROFILE\.agents\skills\skill-manager\scripts\skill-manager.ps1" status --root "<根目录>"
+```
+
+macOS / Linux：
+
+```bash
+~/.agents/skills/skill-manager/scripts/skill-manager status --root "<根目录>"
+```
 
 | 命令 | 作用 |
 | --- | --- |
@@ -109,10 +123,10 @@ git clone https://github.com/swxs/skill-manager.git "$env:USERPROFILE\.agents\sk
 
 | 能力 | Windows | macOS / Linux |
 | --- | --- | --- |
-| Python | 3.9+ | 3.9+ |
+| 运行时 | `runtime/skill-manager-windows-<架构>.exe` | `runtime/skill-manager-<系统>-<架构>` |
 | 符号链接 | 优先尝试 | 优先尝试 |
 | 目录联接 | 符号链接失败时兜底 | 不使用 |
-| 持续集成 | `windows-latest`，Python 3.9 与 3.13 | `ubuntu-latest`，Python 3.9 与 3.13 |
+| 持续集成 | `windows-latest` 上的 `go test` | `ubuntu-latest` 上的 `go test` |
 | 换行 | 仓库文本与脚本写出的文件均为 LF | 同左 |
 
 ## 卸载与回滚
@@ -120,8 +134,8 @@ git clone https://github.com/swxs/skill-manager.git "$env:USERPROFILE\.agents\sk
 从库里卸下一个包：
 
 ```bash
-uv run python scripts/skill_manager.py remove "<包名>"
-uv run python scripts/skill_manager.py link --root "<根目录>"
+~/.agents/skills/skill-manager/scripts/skill-manager remove "<包名>"
+~/.agents/skills/skill-manager/scripts/skill-manager link --root "<根目录>"
 ```
 
 `remove` 只删库里的目录和索引。再跑 `link` 才会删掉仓库里指向它的链接。
@@ -132,18 +146,13 @@ uv run python scripts/skill_manager.py link --root "<根目录>"
 
 ## 开发
 
-```powershell
-$env:UV_CACHE_DIR = Join-Path $env:TEMP 'uvcache'
-uv run --no-project python -m unittest discover -s tests -v
-```
-
-`--no-project` 避免在技能目录里生成 `.venv`。要确认项目模式也能跑：
+源码在 `src/`。需要 Go 1.22 或更新。
 
 ```powershell
-uv run python -c "import sys; print(sys.version)"
+go test -C src ./...
 ```
 
-测试通过 `SKILL_MANAGER_HOME` 和 `--library` 指向临时目录，不会读写真实的 `~/.agents`。
+测试把 `HOME` 和 `USERPROFILE` 指到临时目录，并用 `--library` 隔离技能库，不会读写真实的 `~/.agents`。
 
 ## 许可
 

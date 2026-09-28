@@ -1,0 +1,87 @@
+#!/bin/sh
+# POSIX launcher. Runs runtime/ when it is already there.
+# A git clone has no runtime: download that version's platform zip,
+# unpack the runtime, and check it against checksums.txt before executing.
+set -eu
+
+fail() {
+    printf '%s\n' "$1" >&2
+    exit 1
+}
+
+script_dir=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
+skill_root=$(dirname "$script_dir")
+
+version=$(awk '
+    NR == 1 && $0 == "---" { fm = 1; next }
+    fm && $0 == "---" { exit }
+    fm && $0 ~ /^version:[[:space:]]*/ {
+        sub(/^version:[[:space:]]*/, "")
+        sub(/[[:space:]]*$/, "")
+        print
+        exit
+    }
+' "$skill_root/SKILL.md")
+
+case "$(uname -s)" in
+    Darwin) goos=darwin ;;
+    Linux) goos=linux ;;
+    *) goos=$(uname -s | tr '[:upper:]' '[:lower:]') ;;
+esac
+case "$(uname -m)" in
+    x86_64|amd64) goarch=amd64 ;;
+    aarch64|arm64) goarch=arm64 ;;
+    *) goarch=$(uname -m) ;;
+esac
+
+name="skill-manager-${goos}-${goarch}"
+runtime_dir="$skill_root/runtime"
+dest="$runtime_dir/$name"
+
+if [ ! -f "$dest" ]; then
+    if [ -z "$version" ]; then
+        fail "没有这一版的运行时: $name"
+    fi
+    base="https://github.com/swxs/skill-manager/releases/download/$version"
+    zip_name="skill-manager-${goos}-${goarch}.zip"
+    zip_url="$base/$zip_name"
+    sum_url="$base/checksums.txt"
+    tmp=$(mktemp -d)
+    trap 'rm -rf "$tmp"' EXIT
+    if ! curl -fsSL -o "$tmp/pkg.zip" "$zip_url"; then
+        fail "下载失败: $zip_url"
+    fi
+    if ! curl -fsSL -o "$tmp/checksums.txt" "$sum_url"; then
+        fail "下载失败: $sum_url"
+    fi
+    if ! unzip -q "$tmp/pkg.zip" -d "$tmp/unpack"; then
+        fail "下载失败: $zip_url"
+    fi
+    found=$(find "$tmp/unpack" -type f -name "$name" | head -n 1)
+    if [ -z "$found" ]; then
+        fail "没有这一版的运行时: $name"
+    fi
+    mkdir -p "$runtime_dir"
+    cp "$found" "$dest"
+    if command -v sha256sum >/dev/null 2>&1; then
+        got=$(sha256sum "$dest" | awk '{ print tolower($1) }')
+    elif command -v shasum >/dev/null 2>&1; then
+        got=$(shasum -a 256 "$dest" | awk '{ print tolower($1) }')
+    else
+        rm -f "$dest"
+        fail "无法校验运行时: 需要 sha256sum 或 shasum"
+    fi
+    want=$(awk -v name="$name" '
+        $2 == name { print tolower($1); exit }
+    ' "$tmp/checksums.txt")
+    if [ -z "$want" ] || [ "$want" != "$got" ]; then
+        rm -f "$dest"
+        fail "校验和不符: $name"
+    fi
+fi
+
+if [ "$(uname -s)" = "Darwin" ]; then
+    xattr -d com.apple.quarantine "$dest" 2>/dev/null || true
+fi
+chmod +x "$dest"
+exec "$dest" "$@"

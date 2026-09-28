@@ -1,5 +1,6 @@
 ---
 name: skill-manager
+version: v0.3.0
 description: >-
   Installs local or remote (git URL) skill packs into ~/.agents/skill-library,
   rewrites .skill-lock.json, links from .agents/skills.json, and can init
@@ -16,19 +17,32 @@ disable-model-invocation: true
 
 对用户这句话选择一个子命令。链接和查看要对当前窗口里的每个 workspace 根目录各传一次 `--root`。
 
+Windows：
+
+```powershell
+powershell -NoProfile -File "$env:USERPROFILE\.agents\skills\skill-manager\scripts\skill-manager.ps1" status --root "<根目录>"
+```
+
+macOS / Linux：
+
 ```bash
-uv run python ~/.agents/skills/skill-manager/scripts/skill_manager.py status --root "<根目录>"
-uv run python ~/.agents/skills/skill-manager/scripts/skill_manager.py install "<本机目录>"
-uv run python ~/.agents/skills/skill-manager/scripts/skill_manager.py link --root "<根目录>"
-uv run python ~/.agents/skills/skill-manager/scripts/skill_manager.py link --global
-uv run python ~/.agents/skills/skill-manager/scripts/skill_manager.py add --root "<根目录>" "<包名或包名:技能名>"
-uv run python ~/.agents/skills/skill-manager/scripts/skill_manager.py add --global "<包名、包名:技能名或 Git URL>"
-uv run python ~/.agents/skills/skill-manager/scripts/skill_manager.py upgrade "<包名>"
-uv run python ~/.agents/skills/skill-manager/scripts/skill_manager.py init
-uv run python ~/.agents/skills/skill-manager/scripts/skill_manager.py lock
-uv run python ~/.agents/skills/skill-manager/scripts/skill_manager.py list
-uv run python ~/.agents/skills/skill-manager/scripts/skill_manager.py list "<包名>"
-uv run python ~/.agents/skills/skill-manager/scripts/skill_manager.py remove "<包名>"
+~/.agents/skills/skill-manager/scripts/skill-manager status --root "<根目录>"
+```
+
+把 `status` 换成下面的子命令。脚本名后面的参数原样交给运行时。
+
+```bash
+install "<本机目录>"
+link --root "<根目录>"
+link --global
+add --root "<根目录>" "<包名或包名:技能名>"
+add --global "<包名、包名:技能名或 Git URL>"
+upgrade "<包名>"
+init
+lock
+list
+list "<包名>"
+remove "<包名>"
 ```
 
 `list` 不带包名时只列出包。带包名时列出该包里的技能。
