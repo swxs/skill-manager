@@ -20,7 +20,7 @@
 
 ## 依赖与平台
 
-运行时是静态的 Go 单文件，不需要本机安装 Python 或 uv。承诺支持 Windows、macOS 与 Linux，各有 amd64 与 arm64。持续集成在 Ubuntu 与 Windows 上跑 `go test`。
+运行时是静态的 Go 单文件。承诺支持 Windows、macOS 与 Linux，各有 amd64 与 arm64。持续集成在 Ubuntu 与 Windows 上跑 `go test`。
 
 二进制没有签名。macOS 上启动脚本会在核对通过后去掉隔离属性。Windows 首次运行可能被 SmartScreen 拦截，需要选择仍要运行。
 
@@ -29,8 +29,6 @@
 目标目录都是 `~/.agents/skills/skill-manager`。
 
 下载 [GitHub Release](https://github.com/swxs/skill-manager/releases) 里当前平台的 zip，解压到这个目录。压缩包里已经有 `SKILL.md`、两条启动脚本，以及 `runtime/` 下的运行时，解压后即可使用。
-
-或者把仓库克隆到同一路径。仓库里没有运行时。启动脚本读取 `SKILL.md` 里的 `version`，和 `runtime/version` 记下的版本比较。一致就执行已有运行时。不一致就下载该版本的平台 zip，解压并取出运行时，再用 `checksums.txt` 核对。通过后才替换，并记下这一版。对不上就不执行。
 
 macOS / Linux：
 
@@ -69,7 +67,7 @@ macOS / Linux：
 | `install` | 安装技能到技能库 |
 | `upgrade` | 更新技能库中的技能 |
 | `lock` | 锁定技能库信息 |
-| `status` | 查看全局配置, 全局工作区, 工作区技能状态 |
+| `status` | 查看全局工作区, 工作区技能状态 |
 | `add` | 添加技能声明 |
 | `remove` | 移除技能声明 |
 | `sync` | 按技能声明同步技能 |

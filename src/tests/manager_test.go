@@ -661,10 +661,11 @@ func TestStatusPrintsGlobalBeforeWorkspace(t *testing.T) {
 	if code != 0 && code != 2 {
 		t.Fatal(code, output)
 	}
-	configAt := bytes.Index([]byte(output), []byte("全局配置:"))
+	configAt := bytes.Index([]byte(output), []byte("全局技能声明:"))
 	workspaceAt := bytes.Index([]byte(output), []byte("全局工作区:"))
+	selectionAt := bytes.Index([]byte(output), []byte("\n工作区技能声明:"))
 	rootAt := bytes.Index([]byte(output), []byte("\n工作区:"))
-	if configAt < 0 || workspaceAt < 0 || rootAt < 0 || !(configAt < workspaceAt && workspaceAt < rootAt) {
+	if configAt < 0 || workspaceAt < 0 || selectionAt < 0 || rootAt < 0 || !(configAt < workspaceAt && workspaceAt < selectionAt && selectionAt < rootAt) {
 		t.Fatal(output)
 	}
 }
@@ -709,5 +710,79 @@ func TestInitDoesNotOverwriteExistingPack(t *testing.T) {
 	}
 	if symlink.Target(filepath.Join(home, "skills", "extra")) == "" {
 		t.Fatal("extra should be a link", output)
+	}
+}
+
+func TestListAlignsKindColumn(t *testing.T) {
+	root, _, library := withHome(t)
+	for _, name := range []string{"ab", "longer-name"} {
+		writeSkill(t, filepath.Join(root, "sources", name, "one"))
+		if code, output := runCLI(t, library, "install", filepath.Join(root, "sources", name)); code != 0 {
+			t.Fatal(output)
+		}
+	}
+	code, output := runCLI(t, library, "list")
+	if code != 0 {
+		t.Fatal(output)
+	}
+	cols := []int{}
+	for _, line := range bytes.Split([]byte(output), []byte("\n")) {
+		if len(line) == 0 {
+			continue
+		}
+		at := bytes.Index(line, []byte("pack"))
+		if at < 0 {
+			t.Fatal(output)
+		}
+		cols = append(cols, at)
+	}
+	if len(cols) != 2 || cols[0] != cols[1] {
+		t.Fatal(output)
+	}
+}
+
+func TestStatusUsesDeclarationAndPackSkill(t *testing.T) {
+	root, _, library := withHome(t)
+	source := filepath.Join(root, "sources", "demo")
+	writeSkill(t, filepath.Join(source, "one"))
+	repo := filepath.Join(root, "repo")
+	if err := os.Mkdir(repo, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if code, output := runCLI(t, library, "install", source); code != 0 {
+		t.Fatal(output)
+	}
+	if code, output := runCLI(t, library, "add", "--global", "demo"); code != 0 {
+		t.Fatal(output)
+	}
+	if code, output := runCLI(t, library, "sync", "--global"); code != 0 {
+		t.Fatal(output)
+	}
+	if code, output := runCLI(t, library, "add", "--root", repo, "demo"); code != 0 {
+		t.Fatal(output)
+	}
+	code, output := runCLI(t, library, "status", "--root", repo)
+	if code != 0 {
+		t.Fatal(output)
+	}
+	if !bytes.Contains([]byte(output), []byte("- demo\n")) || !bytes.Contains([]byte(output), []byte("= 未变化 demo:one")) {
+		t.Fatal(output)
+	}
+	if !bytes.Contains([]byte(output), []byte("· 跳过 demo:one（global 已覆盖）")) {
+		t.Fatal(output)
+	}
+	other := filepath.Join(root, "other")
+	if err := os.Mkdir(other, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(other, ".agents"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(other, ".agents", "skills.json"), []byte("[]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	code, output = runCLI(t, library, "status", "--root", other)
+	if code != 0 || bytes.Contains([]byte(output), []byte("跳过 demo:one")) {
+		t.Fatal(code, output)
 	}
 }

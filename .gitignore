@@ -6,7 +6,6 @@ __pycache__/
 .venv/
 
 /runtime/
-/dist/
 
 .scratch/*
 !.scratch/README.md

@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"unicode"
 
 	"github.com/swxs/skill-manager/internal/gitpack"
 	"github.com/swxs/skill-manager/internal/jsonc"
@@ -220,24 +222,20 @@ func loadSelection(root string) ([]string, bool, error) {
 	return items, true, err
 }
 
-func globalCoverage(library string) (map[string]bool, []string, error) {
+func globalCoverage(library string) (map[string]string, []string, error) {
 	path, err := lib.GlobalConfigPath()
 	if err != nil {
-		return map[string]bool{}, nil, err
+		return map[string]string{}, nil, err
 	}
 	if !lib.IsFile(path) {
-		return map[string]bool{}, nil, nil
+		return map[string]string{}, nil, nil
 	}
 	entries, err := loadConfigFile(path)
 	if err != nil {
 		return nil, nil, err
 	}
 	desired, problems := link.Resolve(library, entries)
-	covered := map[string]bool{}
-	for name := range desired {
-		covered[name] = true
-	}
-	return covered, problems, nil
+	return desired, problems, nil
 }
 
 func leadingComment(text string) string {
@@ -281,19 +279,21 @@ func writeSelection(path string, entries []string, createdComment string) error 
 	return lib.WriteLF(path, text)
 }
 
-func workspacePlan(library string, entries []string) (map[string]string, []string, map[string]bool, error) {
+func workspacePlan(library string, entries []string) (map[string]string, []string, map[string]string, error) {
 	desired, problems := link.Resolve(library, entries)
 	covered, globalProblems, err := globalCoverage(library)
 	if err != nil {
 		return nil, nil, nil, err
 	}
 	problems = append(globalProblems, problems...)
-	for name := range desired {
-		if covered[name] {
+	overlap := map[string]string{}
+	for name, target := range desired {
+		if _, ok := covered[name]; ok {
+			overlap[name] = target
 			delete(desired, name)
 		}
 	}
-	return desired, problems, covered, nil
+	return desired, problems, overlap, nil
 }
 
 func printLibrary(library string) {
@@ -319,6 +319,32 @@ func printLibrary(library string) {
 	}
 }
 
+func displayWidth(s string) int {
+	n := 0
+	for _, r := range s {
+		if unicode.Is(unicode.Han, r) || unicode.Is(unicode.Hangul, r) || unicode.Is(unicode.Hiragana, r) || unicode.Is(unicode.Katakana, r) || (r >= 0xFF01 && r <= 0xFF60) {
+			n += 2
+			continue
+		}
+		n++
+	}
+	return n
+}
+
+func padRight(s string, width int) string {
+	if n := displayWidth(s); n < width {
+		return s + strings.Repeat(" ", width-n)
+	}
+	return s
+}
+
+func padLeft(s string, width int) string {
+	if n := displayWidth(s); n < width {
+		return strings.Repeat(" ", width-n) + s
+	}
+	return s
+}
+
 func cmdList(library, packName string) int {
 	if !lib.IsDir(library) {
 		fmt.Printf("skill 库不存在: %s\n", library)
@@ -330,9 +356,21 @@ func cmdList(library, packName string) int {
 			fmt.Println("（空）")
 			return 0
 		}
+		type row struct {
+			name, kind, count string
+		}
+		rows := make([]row, 0, len(packs))
+		nameW, kindW, countW := 0, 0, 0
 		for _, name := range packs {
 			info, _ := lib.Inspect(filepath.Join(library, name))
-			fmt.Printf("%s  %s  %d\n", name, info.Kind, len(info.Skills))
+			item := row{name: name, kind: info.Kind, count: strconv.Itoa(len(info.Skills))}
+			rows = append(rows, item)
+			nameW = max(nameW, displayWidth(item.name))
+			kindW = max(kindW, displayWidth(item.kind))
+			countW = max(countW, displayWidth(item.count))
+		}
+		for _, item := range rows {
+			fmt.Printf("%s  %s  %s\n", padRight(item.name, nameW), padRight(item.kind, kindW), padLeft(item.count, countW))
 		}
 		return 0
 	}
@@ -357,13 +395,8 @@ func cmdList(library, packName string) int {
 	return 0
 }
 
-func printGlobalConfig() int {
-	path, err := lib.GlobalConfigPath()
-	if err != nil {
-		fmt.Println(err.Error())
-		return 2
-	}
-	fmt.Printf("全局配置: %s\n", path)
+func printDeclaration(title, path string) int {
+	fmt.Printf("%s: %s\n", title, path)
 	if !lib.IsFile(path) {
 		fmt.Println("未找到技能声明")
 		return 0
@@ -378,7 +411,7 @@ func printGlobalConfig() int {
 		return 0
 	}
 	for _, entry := range entries {
-		fmt.Printf("  %s\n", entry)
+		fmt.Printf("- %s\n", entry)
 	}
 	return 0
 }
@@ -401,11 +434,16 @@ func reportGlobal(library string, write bool) int {
 		return 2
 	}
 	desired, problems := link.Resolve(library, entries)
-	return link.Apply(home, desired, problems, write, nil, target, false)
+	return link.Apply(home, desired, problems, write, nil, target, false, library)
 }
 
 func cmdStatus(library string, roots []string) int {
-	code := printGlobalConfig()
+	path, err := lib.GlobalConfigPath()
+	if err != nil {
+		fmt.Println(err.Error())
+		return 2
+	}
+	code := printDeclaration("全局技能声明", path)
 	fmt.Println()
 	if next := reportGlobal(library, false); next > code {
 		code = next
@@ -413,17 +451,22 @@ func cmdStatus(library string, roots []string) int {
 	for _, root := range roots {
 		fmt.Println()
 		resolved := lib.Resolve(root)
-		fmt.Printf("工作区: %s\n", filepath.Join(resolved, ".agents"))
-		config := filepath.Join(root, ".agents", lib.ConfigName)
-		fmt.Printf("技能声明: %s\n", config)
-		entries, ok, err := loadSelection(root)
+		config := filepath.Join(resolved, ".agents", lib.ConfigName)
+		if next := printDeclaration("工作区技能声明", config); next != 0 {
+			if next > code {
+				code = next
+			}
+			continue
+		}
+		entries, ok, err := loadSelection(resolved)
 		if err != nil {
 			fmt.Printf("配置无法读取: %s\n", err.Error())
 			code = 2
 			continue
 		}
+		fmt.Println()
+		fmt.Printf("工作区: %s\n", filepath.Join(resolved, ".agents"))
 		if !ok {
-			fmt.Println("未找到 .agents/skills.json")
 			continue
 		}
 		desired, problems, covered, err := workspacePlan(library, entries)
@@ -432,7 +475,7 @@ func cmdStatus(library string, roots []string) int {
 			code = 2
 			continue
 		}
-		if next := link.Apply(root, desired, problems, false, covered, "", true); next > code {
+		if next := link.Apply(resolved, desired, problems, false, covered, "", true, library); next > code {
 			code = next
 		}
 	}
@@ -470,7 +513,7 @@ func cmdSync(library string, roots []string) int {
 			code = 2
 			continue
 		}
-		if next := link.Apply(root, desired, problems, true, covered, "", true); next > code {
+		if next := link.Apply(root, desired, problems, true, covered, "", true, library); next > code {
 			code = next
 		}
 	}
@@ -497,7 +540,7 @@ func cmdSyncGlobal(library string) int {
 	}
 	desired, problems := link.Resolve(library, entries)
 	home, _ := lib.AgentHome()
-	return link.Apply(home, desired, problems, true, nil, target, false)
+	return link.Apply(home, desired, problems, true, nil, target, false, library)
 }
 
 func printProblems(problems []string) {
@@ -1123,7 +1166,7 @@ func printHelp() {
   install   安装技能到技能库
   upgrade   更新技能库中的技能
   lock      锁定技能库信息
-  status    查看全局配置, 全局工作区, 工作区技能状态
+  status    查看全局工作区, 工作区技能状态
   add       添加技能声明
   remove    移除技能声明
   sync      按技能声明同步技能`)
@@ -1173,9 +1216,9 @@ var commandHelp = map[string]string{
 
 用法:
   skill-manager lock`,
-	"status": `查看全局配置, 全局工作区, 工作区技能状态
+	"status": `查看全局工作区, 工作区技能状态
 
-按这个顺序查看：全局配置，全局工作区，指定工作区的技能状态。
+按这个顺序查看：全局技能声明，全局工作区，工作区技能声明，工作区。
 
 用法:
   skill-manager status [--root <工作区>]...

@@ -145,13 +145,38 @@ func Resolve(library string, entries []string) (map[string]string, []string) {
 	return desired, problems
 }
 
-func Apply(root string, desired map[string]string, problems []string, write bool, covered map[string]bool, folder string, manageExclude bool) int {
+func LinkLabel(library, target, name string) string {
+	if library == "" || target == "" {
+		return name
+	}
+	rel, err := filepath.Rel(filepath.Clean(library), filepath.Clean(target))
+	if err != nil {
+		return name
+	}
+	rel = filepath.Clean(rel)
+	if rel == "." || strings.HasPrefix(rel, "..") {
+		return name
+	}
+	parts := strings.Split(rel, string(filepath.Separator))
+	if len(parts) >= 2 {
+		return parts[0] + ":" + parts[len(parts)-1]
+	}
+	if len(parts) == 1 && parts[0] != "" {
+		return parts[0]
+	}
+	return name
+}
+
+func Apply(root string, desired map[string]string, problems []string, write bool, covered map[string]string, folder string, manageExclude bool, library string) int {
 	root = lib.Resolve(root)
 	if folder == "" {
 		folder = skillsDir(root)
 	}
 	if covered == nil {
-		covered = map[string]bool{}
+		covered = map[string]string{}
+	}
+	show := func(target, name string) string {
+		return LinkLabel(library, target, name)
 	}
 	var created, updated, removed, unchanged, owned, skipped []string
 	seenCovered := map[string]bool{}
@@ -170,7 +195,7 @@ func Apply(root string, desired map[string]string, problems []string, write bool
 			}
 			entryPath := filepath.Join(folder, name)
 			current := symlink.Target(entryPath)
-			if covered[name] {
+			if _, ok := covered[name]; ok {
 				seenCovered[name] = true
 				if current == "" {
 					problems = append(problems, fmt.Sprintf("! 冲突 %s: global 已覆盖，但 .agents/skills/%s 是真实目录，未改动", name, name))
@@ -178,7 +203,7 @@ func Apply(root string, desired map[string]string, problems []string, write bool
 					if write {
 						_ = symlink.Remove(entryPath)
 					}
-					removed = append(removed, name+"（global 已覆盖）")
+					removed = append(removed, show(current, name)+"（global 已覆盖）")
 				}
 				continue
 			}
@@ -195,11 +220,11 @@ func Apply(root string, desired map[string]string, problems []string, write bool
 				if write {
 					_ = symlink.Remove(entryPath)
 				}
-				removed = append(removed, name)
+				removed = append(removed, show(current, name))
 				continue
 			}
 			if lib.SamePath(entryPath, wanted) {
-				unchanged = append(unchanged, name)
+				unchanged = append(unchanged, show(wanted, name))
 				linked[name] = wanted
 				continue
 			}
@@ -210,9 +235,9 @@ func Apply(root string, desired map[string]string, problems []string, write bool
 					problems = append(problems, "! "+err.Error())
 					continue
 				}
-				updated = append(updated, fmt.Sprintf("%s (%s)", name, kind))
+				updated = append(updated, fmt.Sprintf("%s (%s)", show(wanted, name), kind))
 			} else {
-				updated = append(updated, name)
+				updated = append(updated, show(wanted, name))
 			}
 			linked[name] = wanted
 		}
@@ -249,9 +274,9 @@ func Apply(root string, desired map[string]string, problems []string, write bool
 				problems = append(problems, "! "+err.Error())
 				continue
 			}
-			created = append(created, fmt.Sprintf("%s (%s)", name, kind))
+			created = append(created, fmt.Sprintf("%s (%s)", show(target, name), kind))
 		} else {
-			created = append(created, name)
+			created = append(created, show(target, name))
 		}
 		linked[name] = target
 	}
@@ -263,7 +288,7 @@ func Apply(root string, desired map[string]string, problems []string, write bool
 	lib.SortFold(coveredNames)
 	for _, name := range coveredNames {
 		if !seenCovered[name] {
-			skipped = append(skipped, name)
+			skipped = append(skipped, show(covered[name], name))
 		}
 	}
 
@@ -326,7 +351,7 @@ func Apply(root string, desired map[string]string, problems []string, write bool
 		fmt.Printf("  %s\n", lib.MissingPackHint)
 	}
 	for _, line := range owned {
-		fmt.Printf("  · 仓库自有目录，未改动 %s\n", line)
+		fmt.Printf("  · 跳过 %s（真实目录）\n", line)
 	}
 	for _, line := range skipped {
 		fmt.Printf("  · 跳过 %s（global 已覆盖）\n", line)

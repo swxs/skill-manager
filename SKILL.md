@@ -1,6 +1,6 @@
 ---
 name: skill-manager
-version: v0.4.1
+version: v0.4.2
 description: >-
   Manages the skill library at ~/.agents/skill-library and links skills
   from a workspace or global-workspace skills.json. Use when the user runs
@@ -48,7 +48,7 @@ macOS / Linux：
 | 安装技能到技能库 | `install` |
 | 更新技能库中的技能 | `upgrade` |
 | 锁定技能库信息 | `lock` |
-| 查看全局配置、全局工作区、工作区技能状态 | `status` |
+| 查看全局工作区, 工作区技能状态 | `status` |
 | 添加技能声明 | `add` |
 | 移除技能声明 | `remove` |
 | 按技能声明同步技能 | `sync` |

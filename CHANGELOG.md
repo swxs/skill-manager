@@ -1,17 +1,24 @@
 # 变更记录
 
+## [0.4.2] - 未发布
+
+- `status` 按全局技能声明、全局工作区、工作区技能声明、工作区打印；链接行写成 `包名:技能名`
+- 只有全局和工作区都声明的技能才显示「global 已覆盖」；真实目录显示为「跳过 名字（真实目录）」
+- `list` 按包名、类型、技能数对齐成列
+
 ## [0.4.1] - 未发布
 
 - 启动脚本比较 `runtime/version` 与 `SKILL.md` 的 `version`，不一致时下载该版本，校验通过后才替换
 
 ## [0.4.0] - 未发布
 
+- 总览帮助每条命令一句，子命令 `--help` 写用法；
+- `init` 把全局工作区里后放入的真实目录换成指向技能库的链接
+- `status` 先打印全局配置，再全局工作区，再工作区
 - `install` 接受本机目录或 Git URL（可选 `#ref`），默认重写 lock，`--unlock` 跳过
 - `add` 不再 fetch，只把包名或 `包名:技能名` 写入技能声明
 - `remove` 改为从技能声明删除完全相同的条目，不再删除库内包
 - `link` 改名为 `sync`，不再保留旧命令名
-- 总览帮助每条命令一句，子命令 `--help` 写用法；`status` 先打印全局配置，再全局工作区，再工作区
-- `init` 把全局工作区里后放入的真实目录换成指向技能库的链接
 
 ## [0.3.0] - 未发布
 
@@ -19,10 +26,10 @@
 
 ## [0.2.0] - 未发布
 
-- `add` 支持 Git URL（及本机 git 目录、可选 `#ref`）：先 fetch 进 skill-library，再写 skills.json；失败不改配置
-- 新增 `upgrade <包名>`：对 origin 默认分支 `pull --ff-only` 并更新 lock
 - 新增 `init`：将 global `~/.agents/skills` 迁入库、写 `~/.agents/skills.json`、lock 与 `link --global`
+- 新增 `upgrade <包名>`：对 origin 默认分支 `pull --ff-only` 并更新 lock
 - `install` 尽量保留 `.git`；lock 扩展 `ref`、`revision`，有 origin 时 `source` 用远程 URL
+- `add` 支持 Git URL（及本机 git 目录、可选 `#ref`）：先 fetch 进 skill-library，再写 skills.json；失败不改配置
 - 库中缺包时 `add`/`status` 输出固定安装提示
 
 ## [0.1.0] - 未发布
