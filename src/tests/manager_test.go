@@ -396,9 +396,6 @@ func TestInstallKeepsGitAndLockMetadata(t *testing.T) {
 	if code, output := runCLI(t, library, "install", source); code != 0 {
 		t.Fatal(output)
 	}
-	if !lib.IsDir(filepath.Join(library, "demo", ".git")) {
-		t.Fatal("missing .git")
-	}
 	text, err := os.ReadFile(filepath.Join(library, ".skill-lock.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -408,7 +405,8 @@ func TestInstallKeepsGitAndLockMetadata(t *testing.T) {
 		t.Fatal(err)
 	}
 	pack := lock["packs"].(map[string]any)["demo"].(map[string]any)
-	if pack["source"] != "https://example.com/demo.git" || pack["revision"] == "" || pack["ref"] != "main" {
+	skills, _ := pack["skills"].(map[string]any)
+	if len(skills) != 0 || pack["revision"] != nil || pack["ref"] != nil || pack["source"] != nil {
 		t.Fatal(pack)
 	}
 }
@@ -797,5 +795,193 @@ func TestStatusUsesDeclarationAndPackSkill(t *testing.T) {
 	code, output = runCLI(t, library, "status", "--root", other)
 	if code != 0 || bytes.Contains([]byte(output), []byte("跳过 demo:one")) {
 		t.Fatal(code, output)
+	}
+}
+
+func initGitRepo(t *testing.T, dir string) {
+	t.Helper()
+	git(t, dir, "init", "-q")
+	git(t, dir, "config", "user.email", "t@example.com")
+	git(t, dir, "config", "user.name", "t")
+	git(t, dir, "add", ".")
+	git(t, dir, "commit", "-m", "init")
+	git(t, dir, "branch", "-M", "main")
+}
+
+func pointGitHubAt(t *testing.T, local, prefix string) {
+	t.Helper()
+	t.Setenv("GIT_CONFIG_COUNT", "1")
+	t.Setenv("GIT_CONFIG_KEY_0", "url."+filepath.ToSlash(local)+".insteadOf")
+	t.Setenv("GIT_CONFIG_VALUE_0", prefix)
+}
+
+func TestPackageNameRules(t *testing.T) {
+	_, _, library := withHome(t)
+	cases := []struct{ url, want string }{
+		{"https://github.com/cathrynlavery/diagram-design", "diagram-design"},
+		{"https://github.com/axtonliu/axton-obsidian-visual-skills", "axton-obsidian-visual"},
+		{"https://github.com/anthropics/skills", "anthropics"},
+		{"https://github.com/anthropics/skills.git", "anthropics"},
+		{"https://github.com/anthropics/skills/tree/main/skills/foo", "anthropics"},
+	}
+	for _, tc := range cases {
+		code, out, errOut := runCLIStreams(t, library, "package-name", tc.url)
+		if code != 0 || errOut != "" || out != tc.want+"\n" {
+			t.Fatalf("%s code %d out %q err %q", tc.url, code, out, errOut)
+		}
+	}
+	code, out, errOut := runCLIStreams(t, library, "package-name", "https://example.com/foo")
+	if code != 2 || out != "" || errOut != "无法从 URL 推导包名: https://example.com/foo\n" {
+		t.Fatalf("code %d out %q err %q", code, out, errOut)
+	}
+}
+
+func TestInstallGitSkillsAndUpgrade(t *testing.T) {
+	root, _, library := withHome(t)
+	upstream := filepath.Join(root, "upstream")
+	writeSkill(t, filepath.Join(upstream, "skills", "alpha"))
+	writeSkill(t, filepath.Join(upstream, "skills", "beta"))
+	initGitRepo(t, upstream)
+	prefix := "https://github.com/cathrynlavery/diagram-design"
+	pointGitHubAt(t, upstream, prefix)
+	code, out, errOut := runCLIStreams(t, library, "install", prefix)
+	if code != 0 || errOut != "" {
+		t.Fatalf("code %d out %q err %q", code, out, errOut)
+	}
+	if lib.IsDir(filepath.Join(library, "diagram-design", ".git")) {
+		t.Fatal("package kept .git")
+	}
+	if _, err := os.Stat(filepath.Join(library, "diagram-design", "alpha", "SKILL.md")); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(filepath.Join(library, ".skill-lock.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var lock map[string]any
+	if err := json.Unmarshal(raw, &lock); err != nil {
+		t.Fatal(err)
+	}
+	pack := lock["packs"].(map[string]any)["diagram-design"].(map[string]any)
+	skills := pack["skills"].(map[string]any)
+	want := prefix + "/tree/main/skills/alpha"
+	if skills["alpha"] != want || skills["beta"] != prefix+"/tree/main/skills/beta" {
+		t.Fatal(skills)
+	}
+	if err := os.WriteFile(filepath.Join(upstream, "skills", "alpha", "SKILL.md"), []byte("---\nname: alpha\n---\nnext\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	git(t, upstream, "add", ".")
+	git(t, upstream, "commit", "-m", "next")
+	code, out, errOut = runCLIStreams(t, library, "upgrade", "diagram-design:alpha")
+	if code != 0 || errOut != "" || !bytes.Contains([]byte(out), []byte("已升级 diagram-design:alpha")) {
+		t.Fatalf("upgrade code %d out %q err %q", code, out, errOut)
+	}
+	text, err := os.ReadFile(filepath.Join(library, "diagram-design", "alpha", "SKILL.md"))
+	if err != nil || !bytes.Contains(text, []byte("next")) {
+		t.Fatalf("%s %v", text, err)
+	}
+	beta, err := os.ReadFile(filepath.Join(library, "diagram-design", "beta", "SKILL.md"))
+	if err != nil || bytes.Contains(beta, []byte("next")) {
+		t.Fatalf("beta changed %s", beta)
+	}
+}
+
+func TestInstallSingleSkillAndRejectsBadSkills(t *testing.T) {
+	root, _, library := withHome(t)
+	upstream := filepath.Join(root, "upstream")
+	writeSkill(t, filepath.Join(upstream, "skills", "engineering", "tdd"))
+	initGitRepo(t, upstream)
+	prefix := "https://github.com/anthropics/skills"
+	pointGitHubAt(t, upstream, prefix)
+	url := prefix + "/tree/main/skills/engineering/tdd"
+	code, _, errOut := runCLIStreams(t, library, "install", url)
+	if code != 0 || errOut != "" {
+		t.Fatalf("code %d err %q", code, errOut)
+	}
+	if _, err := os.Stat(filepath.Join(library, "anthropics", "tdd", "SKILL.md")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(library, "anthropics", "engineering")); !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+	missing := prefix + "/tree/main/skills/engineering"
+	code, _, errOut = runCLIStreams(t, library, "install", missing)
+	if code != 2 || errOut != "目录没有 SKILL.md: "+missing+"\n" {
+		t.Fatalf("code %d err %q", code, errOut)
+	}
+
+	bad := filepath.Join(root, "bad")
+	if err := os.MkdirAll(filepath.Join(bad, "skills", "nope"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(bad, "skills", "nope", "README.md"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	initGitRepo(t, bad)
+	badPrefix := "https://github.com/cathrynlavery/diagram-design"
+	pointGitHubAt(t, bad, badPrefix)
+	code, _, errOut = runCLIStreams(t, library, "install", badPrefix)
+	if code != 2 || errOut != "skills 目录不合法: "+badPrefix+"\n" {
+		t.Fatalf("code %d err %q", code, errOut)
+	}
+	if _, err := os.Stat(filepath.Join(library, "diagram-design")); !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+}
+
+func TestInstallSameSourceOverwritesDifferentSourceErrors(t *testing.T) {
+	root, _, library := withHome(t)
+	first := filepath.Join(root, "first")
+	writeSkill(t, filepath.Join(first, "skills", "alpha"))
+	initGitRepo(t, first)
+	prefix := "https://github.com/axtonliu/axton-obsidian-visual-skills"
+	pointGitHubAt(t, first, prefix)
+	if code, _, errOut := runCLIStreams(t, library, "install", prefix); code != 0 {
+		t.Fatal(errOut)
+	}
+	if err := os.WriteFile(filepath.Join(first, "skills", "alpha", "SKILL.md"), []byte("---\nname: alpha\n---\nagain\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	git(t, first, "add", ".")
+	git(t, first, "commit", "-m", "again")
+	code, _, errOut := runCLIStreams(t, library, "install", prefix)
+	if code != 0 || errOut != "" {
+		t.Fatalf("reinstall code %d err %q", code, errOut)
+	}
+	text, err := os.ReadFile(filepath.Join(library, "axton-obsidian-visual", "alpha", "SKILL.md"))
+	if err != nil || !bytes.Contains(text, []byte("again")) {
+		t.Fatalf("%s %v", text, err)
+	}
+
+	other := filepath.Join(root, "other")
+	writeSkill(t, filepath.Join(other, "skills", "alpha"))
+	initGitRepo(t, other)
+	otherPrefix := "https://github.com/cathrynlavery/diagram-design"
+	pointGitHubAt(t, other, otherPrefix)
+	code, _, errOut = runCLIStreams(t, library, "install", "--package", "axton-obsidian-visual", otherPrefix)
+	if code != 2 || errOut != "同名技能来源不同: axton-obsidian-visual/alpha\n" {
+		t.Fatalf("code %d err %q", code, errOut)
+	}
+	text, err = os.ReadFile(filepath.Join(library, "axton-obsidian-visual", "alpha", "SKILL.md"))
+	if err != nil || !bytes.Contains(text, []byte("again")) {
+		t.Fatalf("overwritten %s", text)
+	}
+}
+
+func TestLocalInstallSkipsUpgradeAddress(t *testing.T) {
+	root, _, library := withHome(t)
+	source := filepath.Join(root, "sources", "demo")
+	writeSkill(t, filepath.Join(source, "one"))
+	code, _, errOut := runCLIStreams(t, library, "install", "--package", "other", source)
+	if code != 2 || errOut != "本地路径不接受 --package\n" {
+		t.Fatalf("code %d err %q", code, errOut)
+	}
+	if code, output := runCLI(t, library, "install", source); code != 0 {
+		t.Fatal(output)
+	}
+	code, out, errOut := runCLIStreams(t, library, "upgrade", "demo")
+	if code != 0 || errOut != "" || out != "没有安装地址: demo:one\n" {
+		t.Fatalf("code %d out %q err %q", code, out, errOut)
 	}
 }

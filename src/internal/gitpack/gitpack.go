@@ -176,11 +176,27 @@ func CheckoutRef(pack, ref string) error {
 }
 
 type lockEntry struct {
-	Kind     string   `json:"kind"`
-	Source   string   `json:"source"`
-	Skills   []string `json:"skills"`
-	Revision string   `json:"revision,omitempty"`
-	Ref      string   `json:"ref,omitempty"`
+	Kind   string            `json:"kind"`
+	Skills map[string]string `json:"skills"`
+}
+
+func (e *lockEntry) UnmarshalJSON(data []byte) error {
+	var raw struct {
+		Kind   string          `json:"kind"`
+		Skills json.RawMessage `json:"skills"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	e.Kind = raw.Kind
+	e.Skills = map[string]string{}
+	if len(raw.Skills) == 0 || string(raw.Skills) == "null" {
+		return nil
+	}
+	if raw.Skills[0] == '[' {
+		return nil
+	}
+	return json.Unmarshal(raw.Skills, &e.Skills)
 }
 
 type lockFile struct {
@@ -229,7 +245,9 @@ func PackDirs(library string) ([]string, error) {
 	return names, nil
 }
 
-func WriteLock(library string, overrides map[string]string) error {
+// WriteLock 按磁盘重写锁定。overrides 是这次要写下的 包名 → 技能名 → 安装地址。
+// 没出现在 overrides 里的技能沿用上次的地址。没有地址的不写入。不读包里的 .git。
+func WriteLock(library string, overrides map[string]map[string]string) error {
 	if err := os.MkdirAll(library, 0o755); err != nil {
 		return err
 	}
@@ -245,31 +263,43 @@ func WriteLock(library string, overrides map[string]string) error {
 		if err != nil {
 			return err
 		}
-		fallback := overrides[name]
-		if fallback == "" {
-			if old, ok := previous.Packs[name]; ok {
-				fallback = old.Source
+		old := map[string]string{}
+		if prev, ok := previous.Packs[name]; ok && prev.Skills != nil {
+			old = prev.Skills
+		}
+		fresh := overrides[name]
+		skills := map[string]string{}
+		for _, skill := range info.Skills {
+			url := ""
+			if fresh != nil {
+				if u, ok := fresh[skill]; ok {
+					url = u
+				} else {
+					url = old[skill]
+				}
+			} else {
+				url = old[skill]
+			}
+			if url != "" {
+				skills[skill] = url
 			}
 		}
-		entry := lockEntry{Kind: info.Kind, Source: fallback, Skills: info.Skills}
-		if entry.Skills == nil {
-			entry.Skills = []string{}
-		}
-		if gitRoot := Root(pack); gitRoot != "" {
-			meta := Metadata(gitRoot, fallback)
-			if src, ok := meta["source"]; ok {
-				entry.Source = src
-			}
-			entry.Revision = meta["revision"]
-			entry.Ref = meta["ref"]
-		}
-		packs[name] = entry
+		packs[name] = lockEntry{Kind: info.Kind, Skills: skills}
 	}
 	payload, err := json.MarshalIndent(lockFile{Version: 1, Packs: packs}, "", "  ")
 	if err != nil {
 		return err
 	}
 	return lib.WriteLF(LockPath(library), string(payload)+"\n")
+}
+
+func SkillURL(library, pack, skill string) string {
+	data := readLock(library)
+	entry, ok := data.Packs[pack]
+	if !ok || entry.Skills == nil {
+		return ""
+	}
+	return entry.Skills[skill]
 }
 
 func OriginDefaultBranch(gitRoot string) string {

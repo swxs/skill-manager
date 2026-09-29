@@ -16,13 +16,13 @@ import (
 	"github.com/swxs/skill-manager/internal/symlink"
 )
 
-func writeInstallLock(library, packName, fallback string, unlock bool) int {
+func writeInstallLock(library, packName string, urls map[string]string, unlock bool) int {
 	if unlock {
 		return 0
 	}
-	overrides := map[string]string{}
-	if packName != "" {
-		overrides[packName] = fallback
+	overrides := map[string]map[string]string{}
+	if packName != "" && len(urls) > 0 {
+		overrides[packName] = urls
 	}
 	if err := gitpack.WriteLock(library, overrides); err != nil {
 		fmt.Println(err.Error())
@@ -123,79 +123,130 @@ func installLocal(library, src, ref string, unlock bool) int {
 	if existed && ref == "" {
 		fmt.Println("跳过复制")
 	}
-	fallback := src
-	if gitRoot := gitpack.Root(dest); gitRoot != "" {
-		meta := gitpack.Metadata(gitRoot, fallback)
-		if srcMeta, ok := meta["source"]; ok {
-			fallback = srcMeta
-		}
-	}
-	return writeInstallLock(library, packName, fallback, unlock)
+	return writeInstallLock(library, packName, nil, unlock)
 }
 
-func installRemote(library, url, ref string, unlock bool) int {
-	packName, err := gitpack.NameFromURL(url)
+func installGit(library, raw, packName string, unlock bool) int {
+	gh, err := gitpack.ParseGitHub(raw)
 	if err != nil {
-		fmt.Println(err.Error())
+		fmt.Fprintf(os.Stderr, "无法从 URL 推导包名: %s\n", strings.TrimSpace(raw))
+		return 2
+	}
+	if packName == "" {
+		packName, err = gitpack.PackageName(gh.Owner, gh.Repo)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "无法从 URL 推导包名: %s\n", strings.TrimSpace(raw))
+			return 2
+		}
+	}
+	if !lib.ValidName(packName) {
+		fmt.Fprintf(os.Stderr, "非法包名: %s\n", packName)
 		return 2
 	}
 	dest := filepath.Join(library, packName)
 	if code := refusePackLink(dest); code != 0 {
 		return code
 	}
-	existed := lib.IsDir(dest)
-	if !existed {
-		if err := os.MkdirAll(library, 0o755); err != nil {
-			fmt.Println(err.Error())
+	cleanup, drops, kind, line := gitpack.Fetch(raw)
+	defer cleanup()
+	if kind != "" {
+		fmt.Fprintln(os.Stderr, line)
+		if kind == "fetch" {
 			return 1
 		}
-		if err := gitpack.Clone(url, dest, ref); err != nil {
-			fmt.Println(err.Error())
-			return 1
+		return 2
+	}
+	for _, drop := range drops {
+		skillDir := filepath.Join(dest, drop.Name)
+		if !lib.IsDir(skillDir) {
+			continue
 		}
-		if _, err := lib.ClassifySource(dest); err != nil {
-			if lib.Exists(dest) && symlink.Target(dest) == "" {
-				_ = lib.RemoveTree(dest)
-			}
-			fmt.Println(err.Error())
-			return 1
-		}
-	} else if ref != "" {
-		if err := gitpack.CheckoutRef(dest, ref); err != nil {
-			fmt.Println(err.Error())
+		old := gitpack.SkillURL(library, packName, drop.Name)
+		if !gitpack.SameURL(old, drop.URL) {
+			fmt.Fprintf(os.Stderr, "同名技能来源不同: %s/%s\n", packName, drop.Name)
 			return 2
 		}
 	}
-	headline := "已安装"
-	if existed && ref == "" {
-		headline = "库里已有包"
-	} else if existed {
-		headline = "已检出"
-	}
-	if code := printInstalled(dest, packName, headline); code != 0 {
-		return code
-	}
-	if existed && ref == "" {
-		fmt.Println("跳过复制")
-	}
-	fallback := url
-	if gitRoot := gitpack.Root(dest); gitRoot != "" {
-		meta := gitpack.Metadata(gitRoot, fallback)
-		if srcMeta, ok := meta["source"]; ok {
-			fallback = srcMeta
+	created := !lib.IsDir(dest)
+	if created {
+		if err := os.MkdirAll(dest, 0o755); err != nil {
+			fmt.Fprintf(os.Stderr, "无法取得技能: %s\n", strings.TrimSpace(raw))
+			return 1
 		}
 	}
-	return writeInstallLock(library, packName, fallback, unlock)
+	var added []string
+	for _, drop := range drops {
+		skillDir := filepath.Join(dest, drop.Name)
+		existed := lib.IsDir(skillDir)
+		if err := swapTree(drop.Dir, skillDir); err != nil {
+			for _, name := range added {
+				_ = lib.RemoveTree(filepath.Join(dest, name))
+			}
+			if created {
+				_ = lib.RemoveTree(dest)
+			}
+			fmt.Fprintf(os.Stderr, "无法取得技能: %s\n", strings.TrimSpace(raw))
+			return 1
+		}
+		if !existed {
+			added = append(added, drop.Name)
+		}
+	}
+	if code := printInstalled(dest, packName, "已安装"); code != 0 {
+		return code
+	}
+	urls := map[string]string{}
+	for _, drop := range drops {
+		urls[drop.Name] = drop.URL
+	}
+	return writeInstallLock(library, packName, urls, unlock)
 }
 
-func installSpec(library, spec string, unlock bool) int {
+func swapTree(src, dest string) error {
+	tmp := dest + ".incoming"
+	_ = lib.RemoveTree(tmp)
+	if err := lib.CopyInstall(src, tmp); err != nil {
+		_ = lib.RemoveTree(tmp)
+		return err
+	}
+	backup := dest + ".backup"
+	had := lib.Exists(dest)
+	if had {
+		_ = lib.RemoveTree(backup)
+		if err := os.Rename(dest, backup); err != nil {
+			_ = lib.RemoveTree(tmp)
+			return err
+		}
+	}
+	if err := os.Rename(tmp, dest); err != nil {
+		if had {
+			_ = os.Rename(backup, dest)
+		}
+		_ = lib.RemoveTree(tmp)
+		return err
+	}
+	if had {
+		_ = lib.RemoveTree(backup)
+	}
+	return nil
+}
+
+func installSpec(library, spec, packName string, unlock bool) int {
 	url, ref := gitpack.ParseSpec(spec)
 	local := lib.ExpandUser(url)
 	if lib.IsDir(local) {
+		if packName != "" {
+			fmt.Fprintln(os.Stderr, "本地路径不接受 --package")
+			return 2
+		}
 		return installLocal(library, local, ref, unlock)
 	}
+	if _, err := gitpack.ParseGitHub(url); err == nil {
+		return installGit(library, url, packName, unlock)
+	}
 	if gitpack.IsURL(spec) || ref != "" {
-		return installRemote(library, url, ref, unlock)
+		fmt.Fprintf(os.Stderr, "无法从 URL 推导包名: %s\n", strings.TrimSpace(url))
+		return 2
 	}
 	fmt.Printf("目录不存在: %s\n", lib.Resolve(local))
 	return 2
@@ -718,54 +769,82 @@ func cmdLock(library string) int {
 	return 0
 }
 
-func upgradePack(library, packName string) int {
-	if !lib.ValidName(packName) {
-		fmt.Printf("非法包名: %s\n", packName)
+func upgradePack(library, spec string) int {
+	packName, skillName, one := splitUpgrade(spec)
+	if !lib.ValidName(packName) || (one && !lib.ValidName(skillName)) {
+		fmt.Printf("非法包名: %s\n", spec)
 		return 2
 	}
 	dest := filepath.Join(library, packName)
 	if !lib.IsDir(dest) || symlink.Target(dest) != "" {
-		fmt.Printf("库里没有包: %s\n", packName)
-		return 1
-	}
-	gitRoot := gitpack.Root(dest)
-	if gitRoot == "" {
-		fmt.Printf("包 %s 不是 git 工作区，无法 upgrade\n", packName)
+		fmt.Fprintf(os.Stderr, "没有这个技能: %s\n", spec)
 		return 2
 	}
-	if text, err := gitpack.Combined("-C", gitRoot, "fetch", "origin"); err != nil {
-		if text == "" {
-			text = "git fetch 失败"
-		}
-		fmt.Println(text)
-		return 2
-	}
-	branch := gitpack.OriginDefaultBranch(gitRoot)
-	if text, err := gitpack.Combined("-C", gitRoot, "checkout", branch); err != nil {
-		if text == "" {
-			text = "无法切换到 " + branch
-		}
-		fmt.Println(text)
-		return 2
-	}
-	if text, err := gitpack.Combined("-C", gitRoot, "pull", "--ff-only", "origin", branch); err != nil {
-		if text == "" {
-			text = "git pull 失败"
-		}
-		fmt.Println(text)
-		return 2
-	}
-	if err := gitpack.WriteLock(library, nil); err != nil {
+	info, err := lib.Inspect(dest)
+	if err != nil {
 		fmt.Println(err.Error())
 		return 1
 	}
-	meta := gitpack.Metadata(gitRoot, "")
-	rev := meta["revision"]
-	if rev == "" {
-		rev = "?"
+	targets := info.Skills
+	if one {
+		found := false
+		for _, name := range info.Skills {
+			if name == skillName {
+				found = true
+				break
+			}
+		}
+		if !found {
+			fmt.Fprintf(os.Stderr, "没有这个技能: %s\n", spec)
+			return 2
+		}
+		targets = []string{skillName}
 	}
-	fmt.Printf("已升级 %s (%s @ %s)\n", packName, branch, rev)
+	failed := false
+	updated := 0
+	for _, name := range targets {
+		url := gitpack.SkillURL(library, packName, name)
+		label := packName + ":" + name
+		if url == "" {
+			fmt.Printf("没有安装地址: %s\n", label)
+			continue
+		}
+		if err := refreshSkill(dest, name, url); err != nil {
+			fmt.Fprintf(os.Stderr, "无法取得技能: %s\n", url)
+			failed = true
+			continue
+		}
+		updated++
+	}
+	if updated > 0 {
+		if code := writeInstallLock(library, packName, nil, false); code != 0 {
+			return code
+		}
+	}
+	if failed {
+		return 1
+	}
+	if updated > 0 {
+		fmt.Printf("已升级 %s\n", spec)
+	}
 	return 0
+}
+
+func splitUpgrade(spec string) (string, string, bool) {
+	pack, skill, ok := strings.Cut(spec, ":")
+	if !ok {
+		return spec, "", false
+	}
+	return pack, skill, true
+}
+
+func refreshSkill(pack, name, raw string) error {
+	cleanup, drops, kind, _ := gitpack.Fetch(raw)
+	defer cleanup()
+	if kind != "" || len(drops) != 1 {
+		return fmt.Errorf("fetch")
+	}
+	return swapTree(drops[0].Dir, filepath.Join(pack, name))
 }
 
 func initSelectionEntries(library, skillsFolder string) ([]string, []string, error) {
@@ -989,11 +1068,13 @@ func Main(argv []string) int {
 	}
 	switch cmd {
 	case "install":
-		unlock, spec, errCode := parseInstall(args)
+		unlock, packName, spec, errCode := parseInstall(args)
 		if errCode != 0 {
 			return errCode
 		}
-		return installSpec(library, spec, unlock)
+		return installSpec(library, spec, packName, unlock)
+	case "package-name":
+		return cmdPackageName(args)
 	case "remove":
 		names, root, global, errCode := parseSelection(args)
 		if errCode != 0 {
@@ -1051,7 +1132,7 @@ func Main(argv []string) int {
 		return cmdStatus(library, roots)
 	case "upgrade":
 		if len(args) != 1 {
-			fmt.Fprintln(os.Stderr, "upgrade 需要一个包名")
+			fmt.Fprintln(os.Stderr, "upgrade 需要一个包名或包名:技能名")
 			return 2
 		}
 		return upgradePack(library, args[0])
@@ -1089,26 +1170,53 @@ func parseRoots(args []string, allowGlobal bool) ([]string, bool, int) {
 	return roots, global, 0
 }
 
-func parseInstall(args []string) (bool, string, int) {
+func parseInstall(args []string) (bool, string, string, int) {
 	unlock := false
+	packName := ""
 	var specs []string
-	for _, arg := range args {
-		switch arg {
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
 		case "--unlock":
 			unlock = true
-		default:
-			if strings.HasPrefix(arg, "-") {
-				fmt.Fprintf(os.Stderr, "无法识别的参数: %s\n", arg)
-				return false, "", 2
+		case "--package":
+			if i+1 >= len(args) || strings.HasPrefix(args[i+1], "-") {
+				fmt.Fprintln(os.Stderr, "缺少 --package 的值")
+				return false, "", "", 2
 			}
-			specs = append(specs, arg)
+			packName = args[i+1]
+			i++
+		default:
+			if strings.HasPrefix(args[i], "-") {
+				fmt.Fprintf(os.Stderr, "无法识别的参数: %s\n", args[i])
+				return false, "", "", 2
+			}
+			specs = append(specs, args[i])
 		}
 	}
 	if len(specs) != 1 {
 		fmt.Fprintln(os.Stderr, "install 需要一个目录或 Git URL")
-		return false, "", 2
+		return false, "", "", 2
 	}
-	return unlock, specs[0], 0
+	return unlock, packName, specs[0], 0
+}
+
+func cmdPackageName(args []string) int {
+	if len(args) != 1 || strings.HasPrefix(args[0], "-") {
+		fmt.Fprintln(os.Stderr, "package-name 需要一个 Git 地址")
+		return 2
+	}
+	gh, err := gitpack.ParseGitHub(args[0])
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "无法从 URL 推导包名: %s\n", strings.TrimSpace(args[0]))
+		return 2
+	}
+	name, err := gitpack.PackageName(gh.Owner, gh.Repo)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "无法从 URL 推导包名: %s\n", strings.TrimSpace(args[0]))
+		return 2
+	}
+	fmt.Println(name)
+	return 0
 }
 
 func parseSelection(args []string) ([]string, string, bool, int) {
@@ -1163,16 +1271,17 @@ func printHelp() {
   skill-manager [--library <路径>] <命令>
 
 命令:
-  init      初始化技能管理体系
-  list      查看当前技能库
-  search    从收集站查找技能
-  install   安装技能到技能库
-  upgrade   更新技能库中的技能
-  lock      锁定技能库信息
-  status    查看全局工作区, 工作区技能状态
-  add       添加技能声明
-  remove    移除技能声明
-  sync      按技能声明同步技能`)
+  init          初始化技能管理体系
+  list          查看当前技能库
+  search        从收集站查找技能
+  install       安装技能到技能库
+  package-name  从 Git 地址推导包名
+  upgrade       更新技能库中的技能
+  lock          锁定技能库信息
+  status        查看全局工作区, 工作区技能状态
+  add           添加技能声明
+  remove        移除技能声明
+  sync          按技能声明同步技能`)
 }
 
 func printCommandHelp(cmd string) int {
@@ -1200,29 +1309,35 @@ var commandHelp = map[string]string{
   skill-manager list [包名]`,
 	"search": `从收集站查找技能
 
-先问 SkillsMP。没有收录、检索词过短、配额用尽或不可用时再问 ModelScope。点名核对最近 5 次打出过收录的 search，再把仓库根交给 install。
+先问 SkillsMP。没有收录、检索词过短、配额用尽或不可用时再问 ModelScope。只列出，不安装。
 
 用法:
-  skill-manager search <检索词>
-  skill-manager search --install <收集站.稳定身份>
-
---install
-  点名一条收录并安装。一次一条。`,
+  skill-manager search <检索词>`,
 	"install": `安装技能到技能库
 
-把本机目录或 Git URL 装进技能库，并锁定技能库信息。库里已有该包时不覆盖文件。没带 #ref 则不切换提交。带了 #ref 则先 fetch 再 checkout；不干净或失败则失败，不锁定，也不删已有目录。
+本机目录按原样复制。Git 地址在 /tree/<分支>/ 之后还有路径时，只复制那一个技能文件夹。只到分支时，只取仓库 skills/ 的直接子目录。包里不留下 .git。
 
 用法:
-  skill-manager install [--unlock] <本机目录或 Git URL[#ref]>
+  skill-manager install [--unlock] [--package <包名>] <本机目录或 Git URL>
+
+--package
+  指定包名。省略时从 Git 地址推导。本机目录不接受此旗标。
 
 --unlock
-  跳过锁定。带 #ref 时检出仍然做。`,
-	"upgrade": `更新技能库中的技能
+  跳过锁定。本机目录带 #ref 时检出仍然做。`,
+	"package-name": `从 Git 地址推导包名
 
-把技能库里的 git 包更新到 origin 的默认分支，并锁定技能库信息。
+只把包名写到标准输出。不安装，不建目录，不写锁定。
 
 用法:
-  skill-manager upgrade <包名>`,
+  skill-manager package-name <Git地址>`,
+	"upgrade": `更新技能库中的技能
+
+按锁定里的安装地址重装。没有地址的跳过。不读包里的 .git。
+
+用法:
+  skill-manager upgrade <包名>
+  skill-manager upgrade <包名:技能名>`,
 	"lock": `锁定技能库信息
 
 按磁盘写下技能库索引。

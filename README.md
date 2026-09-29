@@ -66,6 +66,7 @@ macOS / Linux：
 | `list` | 查看当前技能库 |
 | `search` | 从收集站查找技能 |
 | `install` | 安装技能到技能库 |
+| `package-name` | 从 Git 地址推导包名 |
 | `upgrade` | 更新技能库中的技能 |
 | `lock` | 锁定技能库信息 |
 | `status` | 查看全局工作区, 工作区技能状态 |
@@ -77,7 +78,11 @@ macOS / Linux：
 
 不写 `--root` 时，`add`、`remove`、`sync` 和 `status` 使用当前目录。链接和查看要对当前每个工作区根目录各传一次 `--root`。
 
-`install` 在库里已有该包时不覆盖文件。没带 `#ref` 则不切换提交，默认仍重写 lock。带了 `#ref` 则先 fetch 再 checkout；工作区不干净或失败则整个失败，不写 lock，也不删已有目录。`--unlock` 只跳过写 lock。
+`install <本机目录>` 用目录名当包名。库里已有该包且不带 `#ref` 时不覆盖文件，并写出「跳过复制」。带了 `#ref` 则检出；失败则不写锁定。本机目录不接受 `--package`，也不记安装地址。
+
+`install <Git地址>` 把技能文件夹放进包，包里不留 `.git`。地址在 `/tree/<分支>/` 之后还有路径时只复制那一个文件夹。只到分支时只取仓库 `skills/` 的直接子目录。省略 `--package` 时从地址推导包名。同名技能的安装地址相同则覆盖，不同则整次不改磁盘。`--unlock` 只跳过写锁定。Git 地址里的 `#ref` 不参与取文件。
+
+`package-name <Git地址>` 只打印推导出的包名，不安装。
 
 `add` 和 `remove` 只接受库内 **包名** 或 **包名:技能名**，可以多个。缺包、混合包拆开或其他不合法条目会使整次不改配置，并提示先 `install`。`remove` 不连带删除 `包名:技能名`；有一条在配置里对不上就不改文件。已有条目不重复添加。
 
@@ -93,9 +98,9 @@ macOS / Linux：
 | 纯技能包（pack） | `skill-library/<包名>/<技能名>/SKILL.md` | 根上没有 `SKILL.md`，子目录有 |
 | 混合包（mixed） | 包根和子目录都有 `SKILL.md`，保持原目录，不套同名层 | 两边都有 |
 
-安装时跳过 `__pycache__`、`.venv`、`node_modules`、`.DS_Store` 和源里的 `.skill-lock.json`；**尽量保留 `.git`**（便于 `upgrade`）。以 `.` 开头的目录不计入技能，但其余文件仍会复制。
+安装时跳过 `__pycache__`、`.venv`、`node_modules`、`.DS_Store` 和源里的 `.skill-lock.json`。以 `.` 开头的目录不计入技能，但其余文件仍会复制。Git 安装不把 `.git` 留在包里。
 
-`.skill-lock.json` 是磁盘索引。每个包含 `kind`、`source`、`skills`；git 包另有 `ref`（当前分支/tag）与 `revision`（HEAD SHA）。有 `origin` 时 `source` 为远程 URL，否则为本机路径。`install`（除非 `--unlock`）、`upgrade` 与 `lock` 会更新索引。`remove` 不更新索引。
+`.skill-lock.json` 是磁盘索引。每个包有 `kind`，以及 `skills`：技能文件夹名到安装地址。本地路径安装的技能没有地址，不写入。`install`（除非 `--unlock`）、`upgrade` 与 `lock` 会更新索引。`remove` 不更新索引。
 
 ## 配置格式
 
