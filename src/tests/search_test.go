@@ -12,8 +12,22 @@ import (
 	"github.com/swxs/skill-manager/internal/search"
 )
 
+func isolateSearchCache(t *testing.T) {
+	t.Helper()
+	search.SetCacheFileForTest(filepath.Join(t.TempDir(), "search.json"))
+	t.Cleanup(func() { search.SetCacheFileForTest("") })
+}
+
+func rememberSearch(t *testing.T, records ...search.Record) {
+	t.Helper()
+	if err := search.Remember(records); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func useSearch(t *testing.T, handler http.Handler, install func(string, string) int) {
 	t.Helper()
+	isolateSearchCache(t)
 	srv := httptest.NewServer(handler)
 	t.Cleanup(srv.Close)
 	search.Configure(search.Config{
@@ -33,17 +47,6 @@ func useSearch(t *testing.T, handler http.Handler, install func(string, string) 
 	t.Cleanup(func() {
 		search.ResetConfig()
 		cli.SetSearchInstallForTest(nil)
-	})
-}
-
-func jsonHandler(paths map[string]string) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, ok := paths[r.URL.Path]
-		if !ok {
-			http.NotFound(w, r)
-			return
-		}
-		_, _ = w.Write([]byte(body))
 	})
 }
 
@@ -124,6 +127,7 @@ func TestSearchSecondEmptyIsSilent(t *testing.T) {
 }
 
 func TestSearchInstallUsage(t *testing.T) {
+	isolateSearchCache(t)
 	deny := &denyTransport{t: t}
 	search.Configure(search.Config{Client: &http.Client{Transport: deny}})
 	cli.SetSearchInstallForTest(func(library, url string) int {
@@ -160,29 +164,33 @@ func (d denyTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 	return nil, errors.New("unexpected")
 }
 
-func TestSearchInstallMissAndDown(t *testing.T) {
+func TestSearchInstallMissDoesNotQuery(t *testing.T) {
+	isolateSearchCache(t)
+	search.Configure(search.Config{Client: &http.Client{Transport: denyTransport{t: t}}})
+	cli.SetSearchInstallForTest(func(library, url string) int {
+		t.Errorf("unexpected install %s", url)
+		return 1
+	})
+	t.Cleanup(func() {
+		search.ResetConfig()
+		cli.SetSearchInstallForTest(nil)
+	})
 	_, _, library := withHome(t)
-	useSearch(t, jsonHandler(map[string]string{
-		"/api/v1/skills/search": `{"data":{"skills":[{"id":"other","name":"N","githubUrl":"https://github.com/o/r"}]}}`,
-	}), nil)
-	code, out, errOut := runCLIStreams(t, library, "search", "--install", "skillsmp.missing")
-	if code != 1 || out != "" || errOut != "没有这条收录: skillsmp.missing\n" {
-		t.Fatalf("miss code %d out %q err %q", code, out, errOut)
-	}
-
-	useSearch(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusBadGateway)
-	}), nil)
-	code, out, errOut = runCLIStreams(t, library, "search", "--install", "skillsmp.abc")
-	if code != 1 || out != "" || errOut != "没有这条收录: skillsmp.abc\n" {
-		t.Fatalf("down code %d out %q err %q", code, out, errOut)
+	token := "skillsmp.mattpocock-skills-skills-engineering-tdd-skill-md"
+	code, out, errOut := runCLIStreams(t, library, "search", "--install", token)
+	if code != 1 || out != "" || errOut != "没找到对应技能: "+token+"。请重新查询\n" {
+		t.Fatalf("code %d out %q err %q", code, out, errOut)
 	}
 }
 
 func TestSearchInstallNonGitDoesNotInstall(t *testing.T) {
-	useSearch(t, jsonHandler(map[string]string{
-		"/openapi/v1/skills": `{"data":{"skills":[{"id":"@ajoslin/grill-me","display_name":"Grill Me","source_url":""}]}}`,
-	}), nil)
+	isolateSearchCache(t)
+	cli.SetSearchInstallForTest(func(library, url string) int {
+		t.Errorf("unexpected install %s", url)
+		return 1
+	})
+	t.Cleanup(func() { cli.SetSearchInstallForTest(nil) })
+	rememberSearch(t, search.Record{Catalog: "modelscope", ID: "@ajoslin/grill-me", DisplayName: "Grill Me"})
 	_, _, library := withHome(t)
 	code, out, errOut := runCLIStreams(t, library, "search", "--install", "modelscope.@ajoslin/grill-me")
 	if code != 0 || errOut != "" || out != "未安装，没有 Git 地址: modelscope.@ajoslin/grill-me\n" {
@@ -191,9 +199,18 @@ func TestSearchInstallNonGitDoesNotInstall(t *testing.T) {
 }
 
 func TestSearchInstallExistingPack(t *testing.T) {
-	body := `{"data":{"skills":[{"id":"abc","name":"N","githubUrl":"https://github.com/octocat/Hello-World/tree/master/src"}]}}`
+	isolateSearchCache(t)
+	cli.SetSearchInstallForTest(func(library, url string) int {
+		t.Errorf("unexpected install %s", url)
+		return 1
+	})
+	t.Cleanup(func() { cli.SetSearchInstallForTest(nil) })
+	rememberSearch(t, search.Record{
+		Catalog: "skillsmp",
+		ID:      "abc",
+		RawURL:  "https://github.com/octocat/Hello-World/tree/master/src",
+	})
 	_, _, library := withHome(t)
-	useSearch(t, jsonHandler(map[string]string{"/api/v1/skills/search": body}), nil)
 	if err := os.MkdirAll(filepath.Join(library, "Hello-World", ".git"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -213,12 +230,17 @@ func TestSearchInstallExistingPack(t *testing.T) {
 }
 
 func TestSearchInstallReceivesRepoRoot(t *testing.T) {
+	isolateSearchCache(t)
 	var got string
-	useSearch(t, jsonHandler(map[string]string{
-		"/api/v1/skills/search": `{"data":{"skills":[{"id":"abc","name":"N","githubUrl":"https://github.com/octocat/Hello-World/tree/master/src"}]}}`,
-	}), func(library, url string) int {
+	cli.SetSearchInstallForTest(func(library, url string) int {
 		got = url
 		return 0
+	})
+	t.Cleanup(func() { cli.SetSearchInstallForTest(nil) })
+	rememberSearch(t, search.Record{
+		Catalog: "skillsmp",
+		ID:      "abc",
+		RawURL:  "https://github.com/octocat/Hello-World/tree/master/src",
 	})
 	_, _, library := withHome(t)
 	code, out, errOut := runCLIStreams(t, library, "search", "--install", "skillsmp.abc")
@@ -231,9 +253,17 @@ func TestSearchInstallReceivesRepoRoot(t *testing.T) {
 }
 
 func TestSearchInstallRejectsBadPackName(t *testing.T) {
-	useSearch(t, jsonHandler(map[string]string{
-		"/api/v1/skills/search": `{"data":{"skills":[{"id":"abc","name":"N","githubUrl":"https://github.com/owner/.hidden"}]}}`,
-	}), nil)
+	isolateSearchCache(t)
+	cli.SetSearchInstallForTest(func(library, url string) int {
+		t.Errorf("unexpected install %s", url)
+		return 1
+	})
+	t.Cleanup(func() { cli.SetSearchInstallForTest(nil) })
+	rememberSearch(t, search.Record{
+		Catalog: "skillsmp",
+		ID:      "abc",
+		RawURL:  "https://github.com/owner/.hidden",
+	})
 	_, _, library := withHome(t)
 	code, out, errOut := runCLIStreams(t, library, "search", "--install", "skillsmp.abc")
 	if code != 2 || errOut != "" || out != "无法从 URL 推导包名: https://github.com/owner/.hidden\n" {
@@ -241,5 +271,51 @@ func TestSearchInstallRejectsBadPackName(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(library, ".hidden")); !os.IsNotExist(err) {
 		t.Fatalf("disk changed: %v", err)
+	}
+}
+
+func TestSearchInstallReadsCacheNotCatalog(t *testing.T) {
+	var calls int
+	var got string
+	useSearch(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if r.URL.Path != "/api/v1/skills/search" {
+			t.Errorf("path %s", r.URL.Path)
+			http.NotFound(w, r)
+			return
+		}
+		_, _ = w.Write([]byte(`{"data":{"skills":[{"id":"mattpocock-skills-skills-engineering-tdd-skill-md","name":"tdd","description":"Test-driven development.","githubUrl":"https://github.com/mattpocock/skills/tree/main/skills/engineering/tdd"}]}}`))
+	}), func(library, url string) int {
+		got = url
+		return 0
+	})
+	_, _, library := withHome(t)
+	token := "skillsmp.mattpocock-skills-skills-engineering-tdd-skill-md"
+	code, out, errOut := runCLIStreams(t, library, "search", "tdd")
+	if code != 0 || errOut != "" || calls != 1 {
+		t.Fatalf("list code %d err %q calls %d out %q", code, errOut, calls, out)
+	}
+	code, out, errOut = runCLIStreams(t, library, "search", "--install", token)
+	if code != 0 || out != "" || errOut != "" || calls != 1 {
+		t.Fatalf("install code %d out %q err %q calls %d", code, out, errOut, calls)
+	}
+	if got != "https://github.com/mattpocock/skills" {
+		t.Fatalf("install url %s", got)
+	}
+}
+
+func TestEmptySearchDoesNotDropCache(t *testing.T) {
+	useSearch(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"data":{"skills":[]}}`))
+	}), nil)
+	rememberSearch(t, search.Record{Catalog: "skillsmp", ID: "keep", DisplayName: "Keep", RawURL: "https://github.com/o/r"})
+	_, _, library := withHome(t)
+	code, out, errOut := runCLIStreams(t, library, "search", "none")
+	if code != 0 || out != "" || errOut != "" {
+		t.Fatalf("code %d out %q err %q", code, out, errOut)
+	}
+	rec, found, err := search.Find("skillsmp.keep")
+	if err != nil || !found || rec.RawURL != "https://github.com/o/r" {
+		t.Fatalf("found %v err %v rec %+v", found, err, rec)
 	}
 }

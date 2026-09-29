@@ -1,6 +1,6 @@
 ---
 name: skill-manager
-version: v0.5.0
+version: v0.5.1
 description: >-
   Manages the skill library at ~/.agents/skill-library and links skills
   from a workspace or global-workspace skills.json. Use when the user runs
@@ -64,7 +64,7 @@ macOS / Linux：
 
 `search <检索词>` 只列出。把三行展示给用户看，不自动执行 `search --install`。没有收录行时告诉用户没有收录。
 
-`search --install <收集站.稳定身份>` 一次点名一条。退出码不是 0 时，把标准错误那一行告诉用户并停住。不换收集站，不重试，不调用 `install`。
+`search --install <收集站.稳定身份>` 一次点名一条，只核对最近 5 次打出过收录的 `search`，不再向收集站查询。退出码不是 0 时，把标准错误那一行告诉用户并停住。标准错误是 `没找到对应技能: …。请重新查询` 时，用原来的检索词重新 `search`，再用列出的点号串点名。不换收集站，不把点号串当检索词，不调用 `install`。
 
 退出码是 0 时：
 

@@ -82,6 +82,10 @@ func searchList(query string, cfg search.Config) int {
 	out := search.DefaultPipeline(cfg).List(query)
 	switch out.Kind {
 	case search.KindHits:
+		if err := search.Remember(out.Records); err != nil {
+			fmt.Fprintln(os.Stderr, err.Error())
+			return 1
+		}
 		fmt.Print(search.FormatList(out.Records))
 		return 0
 	case search.KindEmpty:
@@ -96,19 +100,22 @@ func searchList(query string, cfg search.Config) int {
 }
 
 func searchInstallNamed(library, token string, cfg search.Config) int {
-	catalog, id, ok := search.SplitToken(token)
+	catalog, _, ok := search.SplitToken(token)
 	if !ok {
 		fmt.Fprintf(os.Stderr, "点号串无法切开: %s\n", token)
 		return 2
 	}
-	cat, ok := search.New(catalog, cfg)
-	if !ok {
+	if _, ok := search.New(catalog, cfg); !ok {
 		fmt.Fprintf(os.Stderr, "未知收集站: %s\n", catalog)
 		return 2
 	}
-	rec, ok := search.Exact(cat.Search(id), id)
-	if !ok {
-		fmt.Fprintf(os.Stderr, "没有这条收录: %s\n", token)
+	rec, found, err := search.Find(token)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err.Error())
+		return 1
+	}
+	if !found {
+		fmt.Fprintf(os.Stderr, "没找到对应技能: %s。请重新查询\n", token)
 		return 1
 	}
 	root := search.RepoRoot(rec.RawURL)

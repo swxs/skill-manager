@@ -2,11 +2,11 @@ package search
 
 // Record 是安装前的标准收录。仓库根在安装步骤里从 RawURL 截出，不放进收集站实现。
 type Record struct {
-	Catalog     string
-	ID          string
-	DisplayName string
-	Description string
-	RawURL      string
+	Catalog     string `json:"catalog"`
+	ID          string `json:"id"`
+	DisplayName string `json:"displayName"`
+	Description string `json:"description"`
+	RawURL      string `json:"rawURL"`
 }
 
 // Kind 是一次查询的结局。

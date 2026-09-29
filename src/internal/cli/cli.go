@@ -1200,7 +1200,7 @@ var commandHelp = map[string]string{
   skill-manager list [包名]`,
 	"search": `从收集站查找技能
 
-先问 SkillsMP。没有收录、检索词过短、配额用尽或不可用时再问 ModelScope。点名后把仓库根交给 install。
+先问 SkillsMP。没有收录、检索词过短、配额用尽或不可用时再问 ModelScope。点名核对最近 5 次打出过收录的 search，再把仓库根交给 install。
 
 用法:
   skill-manager search <检索词>

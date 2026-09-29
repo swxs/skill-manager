@@ -1,5 +1,9 @@
 # 变更记录
 
+## [0.5.1] - 未发布
+
+- `search --install` 核对最近 5 次列出的收录，不再用稳定身份回收集站检索
+
 ## [0.5.0] - 未发布
 
 - `search` 先问 SkillsMP，没有收录再问 ModelScope；`search --install` 把仓库根交给 `install`
