@@ -66,9 +66,9 @@ jobs:
             fi
             name="skill-manager-${os}-${arch}${ext}"
             stage=$(mktemp -d)
-            cp SKILL.md "$stage/SKILL.md"
+            cp skills/skill-manager/SKILL.md "$stage/SKILL.md"
             mkdir -p "$stage/scripts" "$stage/runtime"
-            cp scripts/skill-manager scripts/skill-manager.ps1 "$stage/scripts/"
+            cp skills/skill-manager/scripts/skill-manager skills/skill-manager/scripts/skill-manager.ps1 "$stage/scripts/"
             chmod +x "$stage/scripts/skill-manager"
             cp "dist/bin/$name" "$stage/runtime/$name"
             printf '%s\n' "$GITHUB_REF_NAME" > "$stage/runtime/version"

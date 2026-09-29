@@ -866,9 +866,6 @@ func initSelectionEntries(library, skillsFolder string) ([]string, []string, err
 				continue
 			}
 			entryPath := filepath.Join(skillsFolder, name)
-			if name == "skill-manager" && symlink.Target(entryPath) == "" {
-				continue
-			}
 			target := symlink.Target(entryPath)
 			if target != "" {
 				resolvedTarget := lib.Resolve(target)

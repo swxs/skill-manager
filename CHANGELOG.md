@@ -8,6 +8,8 @@
 - `upgrade` 按安装地址重取并覆盖；没有地址则跳过
 - 不再接受 `search --install`
 - 总览 `--help` 的命令说明按列对齐
+- 技能正文和启动脚本放在 `skills/skill-manager/`。发布 zip 的根目录仍是 `SKILL.md`、`scripts/` 和 `runtime/`
+- `init` 不再按名字跳过 `skill-manager`。带 `SKILL.md` 的真实目录和其他技能一样收进技能库
 
 ## [0.5.1] - 未发布
 

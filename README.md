@@ -2,7 +2,7 @@
 
 把本机技能目录装进 `~/.agents/skill-library`，再按配置链到当前仓库的 `.agents/skills`，或链到用户级 `~/.agents/skills`。
 
-这个仓库是公开的 skill 包。装到 `~/.agents/skills/skill-manager`，技能正文里的脚本路径才成立。可以下载对应平台的完整压缩包并解压到这个目录，也可以把仓库克隆到同一路径。
+这个仓库是公开的项目。技能正文在 `skills/skill-manager/`。装到 `~/.agents/skills/skill-manager` 之后，技能正文里的脚本路径才成立。下载对应平台的完整压缩包并解压到这个目录，或把仓库克隆到普通项目目录后再安装。
 
 ## 做什么
 
@@ -28,23 +28,15 @@
 
 目标目录都是 `~/.agents/skills/skill-manager`。
 
-下载 [GitHub Release](https://github.com/swxs/skill-manager/releases) 里当前平台的 zip，解压到这个目录。压缩包里已经有 `SKILL.md`、两条启动脚本，以及 `runtime/` 下的运行时，解压后即可使用。
+下载 [GitHub Release](https://github.com/swxs/skill-manager/releases) 里当前平台的 zip，解压到这个目录。压缩包根上已经有 `SKILL.md`、两条启动脚本，以及 `runtime/` 下的运行时，解压后即可使用。
 
-macOS / Linux：
+克隆仓库时放到普通项目目录，不要放到 `~/.agents/skills/skill-manager`：
 
 ```bash
-mkdir -p ~/.agents/skills
-git clone https://github.com/swxs/skill-manager.git ~/.agents/skills/skill-manager
+git clone https://github.com/swxs/skill-manager.git
 ```
 
-Windows（PowerShell）：
-
-```powershell
-New-Item -ItemType Directory -Force -Path "$env:USERPROFILE\.agents\skills"
-git clone https://github.com/swxs/skill-manager.git "$env:USERPROFILE\.agents\skills\skill-manager"
-```
-
-换版本时，zip 安装是覆盖整个目录，压缩包里的 `runtime/version` 与 `SKILL.md` 一致。clone 安装是更新 `SKILL.md` 的 `version`，下次启动发现记下的版本不同再下载。同一版本的发布文件被替换时，已记下的运行时不会更新。
+换版本时，zip 安装是覆盖整个技能目录，压缩包里的 `runtime/version` 与 `SKILL.md` 一致。同一版本的发布文件被替换时，已记下的运行时不会更新。
 
 ## 命令
 
@@ -118,7 +110,7 @@ macOS / Linux：
 
 - 优先创建符号链接。没有权限时，在 Windows 上用目录联接（junction）兜底。
 - 同名技能报冲突并跳过，不覆盖，不加前缀。
-- 目标路径已经是真实目录时跳过。`~/.agents/skills/skill-manager` 是这个工具自己的真实目录，`sync --global` 不会删除或覆盖它。
+- 目标路径已经是真实目录时跳过。`sync --global` 不会删除或覆盖真实目录。
 - global 配置里的技能名会盖住仓库同名链接：仓库 `sync` 不新建这些名字，并删掉仓库里已有的同名链接。`status` 用同一套规则判断是否对齐。
 - 仓库 `sync` 会维护该仓库 `.git/info/exclude` 里由本工具管理的一段，把新链入的 `.agents/skills/<名字>` 排除出版本库。`sync --global` 不改 exclude。
 - 配置里去掉的链接，下次 `sync` 时删除。
@@ -145,7 +137,7 @@ macOS / Linux：
 
 `remove` 只从 `skills.json` 删掉完全相同的条目。再跑 `sync` 才会删掉仓库里指向它的链接。技能库里的目录保持不动。用户级配置用 `remove --global`，再跑 `sync --global`。
 
-卸掉这个工具本身：删除 `~/.agents/skills/skill-manager` 这个克隆。技能库、仓库链接和 `~/.agents/skills.json` 都还在，不受影响。
+卸掉这个工具本身：删掉 `~/.agents/skills/skill-manager` 这条链接。技能库里的包、其它链接和 `~/.agents/skills.json` 都还在。要连技能库里的这份一起去掉，再删 `~/.agents/skill-library/skill-manager`。
 
 ## 开发
 

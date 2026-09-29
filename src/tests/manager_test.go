@@ -493,6 +493,34 @@ func TestInitGroupsGlobalLinksIntoPackEntry(t *testing.T) {
 	}
 }
 
+func TestInitInstallsRealSkillManager(t *testing.T) {
+	_, home, library := withHome(t)
+	skillsHome := filepath.Join(home, "skills")
+	writeSkill(t, filepath.Join(skillsHome, "skill-manager"))
+	code, output := runCLI(t, library, "init")
+	if code != 0 {
+		t.Fatal(output)
+	}
+	if _, err := os.Stat(filepath.Join(library, "skill-manager", "skill-manager", "SKILL.md")); err != nil {
+		t.Fatal(err, output)
+	}
+	raw, err := os.ReadFile(filepath.Join(home, "skills.json"))
+	if err != nil {
+		t.Fatal(err, output)
+	}
+	got, err := jsonc.Parse(string(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	items := got.([]any)
+	if len(items) != 1 || items[0] != "skill-manager" {
+		t.Fatal(got, output)
+	}
+	if symlink.Target(filepath.Join(skillsHome, "skill-manager")) == "" {
+		t.Fatal("still a real directory", output)
+	}
+}
+
 func gitOutput(t *testing.T, dir string, args ...string) string {
 	t.Helper()
 	cmd := exec.Command("git", args...)
