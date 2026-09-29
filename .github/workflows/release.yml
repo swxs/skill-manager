@@ -71,6 +71,7 @@ jobs:
             cp scripts/skill-manager scripts/skill-manager.ps1 "$stage/scripts/"
             chmod +x "$stage/scripts/skill-manager"
             cp "dist/bin/$name" "$stage/runtime/$name"
+            printf '%s\n' "$GITHUB_REF_NAME" > "$stage/runtime/version"
             (
               cd "$stage"
               zip -r "$root/dist/zips/skill-manager-${os}-${arch}.zip" .

@@ -1,5 +1,9 @@
 # 变更记录
 
+## [0.4.1] - 未发布
+
+- 启动脚本比较 `runtime/version` 与 `SKILL.md` 的 `version`，不一致时下载该版本，校验通过后才替换
+
 ## [0.4.0] - 未发布
 
 - `install` 接受本机目录或 Git URL（可选 `#ref`），默认重写 lock，`--unlock` 跳过

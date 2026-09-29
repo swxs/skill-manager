@@ -30,7 +30,7 @@
 
 下载 [GitHub Release](https://github.com/swxs/skill-manager/releases) 里当前平台的 zip，解压到这个目录。压缩包里已经有 `SKILL.md`、两条启动脚本，以及 `runtime/` 下的运行时，解压后即可使用。
 
-或者把仓库克隆到同一路径。仓库里没有运行时。第一次执行启动脚本时，脚本读取 `SKILL.md` 里的 `version`，下载该版本的平台 zip，解压并取出运行时，再用 `checksums.txt` 核对这个运行时文件。对不上就不执行。
+或者把仓库克隆到同一路径。仓库里没有运行时。启动脚本读取 `SKILL.md` 里的 `version`，和 `runtime/version` 记下的版本比较。一致就执行已有运行时。不一致就下载该版本的平台 zip，解压并取出运行时，再用 `checksums.txt` 核对。通过后才替换，并记下这一版。对不上就不执行。
 
 macOS / Linux：
 
@@ -46,7 +46,7 @@ New-Item -ItemType Directory -Force -Path "$env:USERPROFILE\.agents\skills"
 git clone https://github.com/swxs/skill-manager.git "$env:USERPROFILE\.agents\skills\skill-manager"
 ```
 
-换版本时，zip 安装是覆盖整个目录。clone 安装是改 `SKILL.md` 的 `version`，删掉 `runtime/`，下次启动再下载。`runtime/` 里已有与当前 `version` 一起装上的运行时时，不会重新下载。
+换版本时，zip 安装是覆盖整个目录，压缩包里的 `runtime/version` 与 `SKILL.md` 一致。clone 安装是更新 `SKILL.md` 的 `version`，下次启动发现记下的版本不同再下载。同一版本的发布文件被替换时，已记下的运行时不会更新。
 
 ## 命令
 

@@ -1,6 +1,6 @@
-﻿# Windows launcher. Runs runtime/ when it is already there.
-# A git clone has no runtime: download that version's platform zip,
-# unpack the runtime, and check it against checksums.txt before executing.
+﻿# Windows launcher. Runs runtime/ when its recorded version matches SKILL.md.
+# Otherwise download that version's platform zip, unpack the runtime,
+# and check it against checksums.txt before replacing and executing.
 $ErrorActionPreference = "Stop"
 
 function Fail([string]$Message) {
@@ -34,8 +34,13 @@ switch ($env:PROCESSOR_ARCHITECTURE) {
 $name = "skill-manager-windows-$arch.exe"
 $runtimeDir = Join-Path $skillRoot "runtime"
 $dest = Join-Path $runtimeDir $name
+$versionFile = Join-Path $runtimeDir "version"
+$recorded = ""
+if (Test-Path -LiteralPath $versionFile) {
+    $recorded = ([System.IO.File]::ReadAllText($versionFile)).Trim()
+}
 
-if (-not (Test-Path -LiteralPath $dest)) {
+if (-not ((Test-Path -LiteralPath $dest) -and $version -and ($recorded -eq $version))) {
     if (-not $version) {
         Fail "没有这一版的运行时: $name"
     }
@@ -49,38 +54,45 @@ if (-not (Test-Path -LiteralPath $dest)) {
     $sumPath = Join-Path $tmp "checksums.txt"
     $unpack = Join-Path $tmp "unpack"
     try {
-        Invoke-WebRequest -Uri $zipUrl -OutFile $zipPath -UseBasicParsing
-    } catch {
-        Fail "下载失败: $zipUrl"
-    }
-    try {
-        Invoke-WebRequest -Uri $sumUrl -OutFile $sumPath -UseBasicParsing
-    } catch {
-        Fail "下载失败: $sumUrl"
-    }
-    try {
-        Expand-Archive -LiteralPath $zipPath -DestinationPath $unpack -Force
-    } catch {
-        Fail "下载失败: $zipUrl"
-    }
-    $found = Get-ChildItem -LiteralPath $unpack -Recurse -File -Filter $name | Select-Object -First 1
-    if (-not $found) {
-        Fail "没有这一版的运行时: $name"
-    }
-    New-Item -ItemType Directory -Force -Path $runtimeDir | Out-Null
-    Copy-Item -LiteralPath $found.FullName -Destination $dest -Force
-    $got = (Get-FileHash -Algorithm SHA256 -LiteralPath $dest).Hash.ToLowerInvariant()
-    $want = ""
-    foreach ($row in (Get-Content -LiteralPath $sumPath)) {
-        $row = $row.Trim()
-        if ($row -match '^([0-9a-fA-F]{64})  (.+)$' -and $Matches[2] -eq $name) {
-            $want = $Matches[1].ToLowerInvariant()
-            break
+        try {
+            Invoke-WebRequest -Uri $zipUrl -OutFile $zipPath -UseBasicParsing
+        } catch {
+            Fail "下载失败: $zipUrl"
         }
-    }
-    if (-not $want -or $want -ne $got) {
-        Remove-Item -LiteralPath $dest -Force
-        Fail "校验和不符: $name"
+        try {
+            Invoke-WebRequest -Uri $sumUrl -OutFile $sumPath -UseBasicParsing
+        } catch {
+            Fail "下载失败: $sumUrl"
+        }
+        try {
+            Expand-Archive -LiteralPath $zipPath -DestinationPath $unpack -Force
+        } catch {
+            Fail "下载失败: $zipUrl"
+        }
+        $found = Get-ChildItem -LiteralPath $unpack -Recurse -File -Filter $name | Select-Object -First 1
+        if (-not $found) {
+            Fail "没有这一版的运行时: $name"
+        }
+        $got = (Get-FileHash -Algorithm SHA256 -LiteralPath $found.FullName).Hash.ToLowerInvariant()
+        $want = ""
+        foreach ($row in (Get-Content -LiteralPath $sumPath)) {
+            $row = $row.Trim()
+            if ($row -match '^([0-9a-fA-F]{64})  (.+)$' -and $Matches[2] -eq $name) {
+                $want = $Matches[1].ToLowerInvariant()
+                break
+            }
+        }
+        if (-not $want -or $want -ne $got) {
+            Fail "校验和不符: $name"
+        }
+        New-Item -ItemType Directory -Force -Path $runtimeDir | Out-Null
+        Copy-Item -LiteralPath $found.FullName -Destination $dest -Force
+        $utf8 = New-Object System.Text.UTF8Encoding $false
+        [System.IO.File]::WriteAllText($versionFile, "$version`n", $utf8)
+    } finally {
+        if (Test-Path -LiteralPath $tmp) {
+            Remove-Item -LiteralPath $tmp -Recurse -Force
+        }
     }
 }
 

@@ -1,7 +1,7 @@
 #!/bin/sh
-# POSIX launcher. Runs runtime/ when it is already there.
-# A git clone has no runtime: download that version's platform zip,
-# unpack the runtime, and check it against checksums.txt before executing.
+# POSIX launcher. Runs runtime/ when its recorded version matches SKILL.md.
+# Otherwise download that version's platform zip, unpack the runtime,
+# and check it against checksums.txt before replacing and executing.
 set -eu
 
 fail() {
@@ -37,8 +37,13 @@ esac
 name="skill-manager-${goos}-${goarch}"
 runtime_dir="$skill_root/runtime"
 dest="$runtime_dir/$name"
+version_file="$runtime_dir/version"
+recorded=""
+if [ -f "$version_file" ]; then
+    recorded=$(awk 'NR == 1 { sub(/\r$/, ""); print; exit }' "$version_file")
+fi
 
-if [ ! -f "$dest" ]; then
+if [ ! -f "$dest" ] || [ -z "$version" ] || [ "$recorded" != "$version" ]; then
     if [ -z "$version" ]; then
         fail "没有这一版的运行时: $name"
     fi
@@ -61,23 +66,24 @@ if [ ! -f "$dest" ]; then
     if [ -z "$found" ]; then
         fail "没有这一版的运行时: $name"
     fi
-    mkdir -p "$runtime_dir"
-    cp "$found" "$dest"
     if command -v sha256sum >/dev/null 2>&1; then
-        got=$(sha256sum "$dest" | awk '{ print tolower($1) }')
+        got=$(sha256sum "$found" | awk '{ print tolower($1) }')
     elif command -v shasum >/dev/null 2>&1; then
-        got=$(shasum -a 256 "$dest" | awk '{ print tolower($1) }')
+        got=$(shasum -a 256 "$found" | awk '{ print tolower($1) }')
     else
-        rm -f "$dest"
         fail "无法校验运行时: 需要 sha256sum 或 shasum"
     fi
     want=$(awk -v name="$name" '
         $2 == name { print tolower($1); exit }
     ' "$tmp/checksums.txt")
     if [ -z "$want" ] || [ "$want" != "$got" ]; then
-        rm -f "$dest"
         fail "校验和不符: $name"
     fi
+    mkdir -p "$runtime_dir"
+    cp "$found" "$dest"
+    printf '%s\n' "$version" > "$version_file"
+    rm -rf "$tmp"
+    trap - EXIT
 fi
 
 if [ "$(uname -s)" = "Darwin" ]; then
