@@ -1,11 +1,11 @@
 ---
 name: skill-manager
-version: v0.4.2
+version: v0.5.0
 description: >-
   Manages the skill library at ~/.agents/skill-library and links skills
   from a workspace or global-workspace skills.json. Use when the user runs
   /skill-manager, or asks to init, list, install, upgrade, lock, status,
-  add, remove, or sync skills.
+  add, remove, sync, or search skills.
 disable-model-invocation: true
 ---
 
@@ -45,6 +45,7 @@ macOS / Linux：
 | --- | --- |
 | 初始化技能管理体系 | `init` |
 | 查看当前技能库 | `list` |
+| 从收集站查找技能 | `search` |
 | 安装技能到技能库 | `install` |
 | 更新技能库中的技能 | `upgrade` |
 | 锁定技能库信息 | `lock` |
@@ -57,7 +58,22 @@ macOS / Linux：
 
 `add` 和 `remove` 只改技能声明。声明改完后再 `sync`，链接才会变。没有从技能库删除整个包的命令。
 
-把脚本输出告诉用户。退出码不是 0 时停住，不要自行补链、覆盖真实目录或删除技能库里的包。
+把脚本输出告诉用户。退出码不是 0 时停住，不要自行补链、覆盖真实目录或删除技能库里的包。唯一例外是 `search` 打出 `库里已有非 git 目录: <包名>`：清掉技能库里的这个目录，再 `install` 仓库根。只认这一句。
+
+## search
+
+`search <检索词>` 只列出。把三行展示给用户看，不自动执行 `search --install`。没有收录行时告诉用户没有收录。
+
+`search --install <收集站.稳定身份>` 一次点名一条。退出码不是 0 时，把标准错误那一行告诉用户并停住。不换收集站，不重试，不调用 `install`。
+
+退出码是 0 时：
+
+- 标准输出是 `未安装，没有 Git 地址: …`：自行取得该技能。不调用 `install`，不放进技能库。
+- 标准输出是 `库里已有 git 包: <包名>`：先问用户要不要升级。用户同意才代跑 `upgrade <包名>`。用户不同意就停。
+- 标准输出是 `库里已有非 git 目录: <包名>`：清掉技能库里的这个目录，再 `install` 仓库根。安装成功后按下面的方式 `add` 和 `sync`。
+- 其余退出码 0 是这次 `install` 的输出。告诉用户，然后代跑 `add` 和 `sync`。
+
+`install` 成功后的 `add` 默认写 `包名:技能名`，只链这次点名的那一个技能。技能名用 `install` 输出里对得上的那条。全局工作区用 `add --global` 和 `sync --global`。
 
 ## 技能声明怎么写
 

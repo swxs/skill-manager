@@ -64,6 +64,7 @@ macOS / Linux：
 | --- | --- |
 | `init` | 初始化技能管理体系 |
 | `list` | 查看当前技能库 |
+| `search` | 从收集站查找技能 |
 | `install` | 安装技能到技能库 |
 | `upgrade` | 更新技能库中的技能 |
 | `lock` | 锁定技能库信息 |
@@ -150,6 +151,13 @@ go test -C src ./...
 ```
 
 测试把 `HOME` 和 `USERPROFILE` 指到临时目录，并用 `--library` 隔离技能库，不会读写真实的 `~/.agents`。
+
+## 致谢
+
+`search` 使用的收录来自下列收集站，感谢它们公开检索接口：
+
+- [SkillsMP](https://skillsmp.com/)。
+- [ModelScope 魔搭技能中心](https://www.modelscope.cn/skills)。
 
 ## 许可
 

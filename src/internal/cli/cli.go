@@ -1014,6 +1014,8 @@ func Main(argv []string) int {
 			return 2
 		}
 		return cmdList(library, name)
+	case "search":
+		return cmdSearch(library, args)
 	case "sync":
 		roots, global, errCode := parseRoots(args, true)
 		if errCode != 0 {
@@ -1163,6 +1165,7 @@ func printHelp() {
 命令:
   init      初始化技能管理体系
   list      查看当前技能库
+  search    从收集站查找技能
   install   安装技能到技能库
   upgrade   更新技能库中的技能
   lock      锁定技能库信息
@@ -1195,6 +1198,16 @@ var commandHelp = map[string]string{
 
 用法:
   skill-manager list [包名]`,
+	"search": `从收集站查找技能
+
+先问 SkillsMP。没有收录、检索词过短、配额用尽或不可用时再问 ModelScope。点名后把仓库根交给 install。
+
+用法:
+  skill-manager search <检索词>
+  skill-manager search --install <收集站.稳定身份>
+
+--install
+  点名一条收录并安装。一次一条。`,
 	"install": `安装技能到技能库
 
 把本机目录或 Git URL 装进技能库，并锁定技能库信息。库里已有该包时不覆盖文件。没带 #ref 则不切换提交。带了 #ref 则先 fetch 再 checkout；不干净或失败则失败，不锁定，也不删已有目录。

@@ -44,19 +44,32 @@ func withHome(t *testing.T) (root, home, library string) {
 
 func runCLI(t *testing.T, library string, args ...string) (int, string) {
 	t.Helper()
-	old := os.Stdout
-	r, w, err := os.Pipe()
+	code, out, _ := runCLIStreams(t, library, args...)
+	return code, out
+}
+
+func runCLIStreams(t *testing.T, library string, args ...string) (int, string, string) {
+	t.Helper()
+	oldOut, oldErr := os.Stdout, os.Stderr
+	outR, outW, err := os.Pipe()
 	if err != nil {
 		t.Fatal(err)
 	}
-	os.Stdout = w
+	errR, errW, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout, os.Stderr = outW, errW
 	code := cli.Main(append([]string{"--library", library}, args...))
-	_ = w.Close()
-	os.Stdout = old
-	var buf bytes.Buffer
-	_, _ = io.Copy(&buf, r)
-	_ = r.Close()
-	return code, buf.String()
+	_ = outW.Close()
+	_ = errW.Close()
+	os.Stdout, os.Stderr = oldOut, oldErr
+	var outBuf, errBuf bytes.Buffer
+	_, _ = io.Copy(&outBuf, outR)
+	_, _ = io.Copy(&errBuf, errR)
+	_ = outR.Close()
+	_ = errR.Close()
+	return code, outBuf.String(), errBuf.String()
 }
 
 func git(t *testing.T, dir string, args ...string) {
