@@ -25,11 +25,11 @@
 │   ├── internal/gitpack/    Git 包的 fetch / checkout
 │   ├── internal/symlink/    符号链接；Windows 上失败时用目录联接
 │   ├── internal/jsonc/      带注释和尾随逗号的 skills.json
-│   └── tests/               集成测试。隔离 HOME，并用 --library
+│   └── tests/               测试文件都在这里。隔离 HOME，并用 --library
 └── .github/workflows/       CI（go test）与按 tag 打开发布
 ```
 
-需要 Go 1.22 或更新。在仓库根目录跑 `go test -C src ./...`。测试把 `HOME` 和 `USERPROFILE` 指到临时目录，不会读写真实的 `~/.agents`。
+需要 Go 1.22 或更新。在仓库根目录跑 `go test -C src ./tests`。测试文件统一放在 `src/tests`。测试把 `HOME` 和 `USERPROFILE` 指到临时目录，不会读写真实的 `~/.agents`。
 
 ## 主要功能
 

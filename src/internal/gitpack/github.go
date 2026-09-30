@@ -5,9 +5,17 @@ import (
 	lib "github.com/swxs/skill-manager/internal/library"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 )
+
+var lookPath = exec.LookPath
+
+func gitAvailable() bool {
+	_, err := lookPath("git")
+	return err == nil
+}
 
 // GitHub 是一条 https://github.com/{owner}/{repo} 地址，可以带 /tree/<分支> 和仓库内路径。
 type GitHub struct {
@@ -124,7 +132,7 @@ type Drop struct {
 	URL  string
 }
 
-// Fetch 克隆到临时目录并列出要复制的技能文件夹。调用方负责 cleanup。
+// Fetch 把要复制的技能文件夹放进临时目录。本机有 git 时浅克隆并只检出这些目录，没有 git 时从 GitHub 接口取。调用方负责 cleanup。
 func Fetch(raw string) (cleanup func(), drops []Drop, kind string, line string) {
 	gh, err := ParseGitHub(raw)
 	if err != nil {
@@ -138,27 +146,15 @@ func Fetch(raw string) (cleanup func(), drops []Drop, kind string, line string) 
 		return func() {}, nil, "fetch", fmt.Sprintf("无法取得技能: %s", strings.TrimSpace(raw))
 	}
 	cleanup = func() { _ = os.RemoveAll(dir) }
-	if text, err := Combined("clone", gh.CloneURL(), dir); err != nil {
-		cleanup()
-		if text == "" {
-			text = "无法取得技能: " + strings.TrimSpace(raw)
-		} else {
-			text = fmt.Sprintf("无法取得技能: %s", strings.TrimSpace(raw))
-		}
-		return func() {}, nil, "fetch", text
-	}
-	branch := gh.Branch
-	if branch != "" {
-		if _, err := Combined("-C", dir, "checkout", branch); err != nil {
-			cleanup()
-			return func() {}, nil, "fetch", fmt.Sprintf("无法取得技能: %s", strings.TrimSpace(raw))
-		}
+	var branch string
+	if gitAvailable() {
+		branch, kind, line = populateWithGit(dir, gh, raw)
 	} else {
-		branch = Command(dir, "rev-parse", "--abbrev-ref", "HEAD")
-		if branch == "" || branch == "HEAD" {
-			cleanup()
-			return func() {}, nil, "fetch", fmt.Sprintf("无法取得技能: %s", strings.TrimSpace(raw))
-		}
+		branch, kind, line = populateWithHTTP(dir, gh, raw)
+	}
+	if kind != "" {
+		cleanup()
+		return func() {}, nil, kind, line
 	}
 	if gh.Skill {
 		skillDir := filepath.Join(dir, filepath.FromSlash(gh.SkillRel))
@@ -220,4 +216,34 @@ func skillChildren(root string) ([]string, bool) {
 	}
 	lib.SortFold(names)
 	return names, false
+}
+
+func populateWithGit(dir string, gh GitHub, raw string) (string, string, string) {
+	args := []string{
+		"-c", "core.autocrlf=false",
+		"-c", "advice.detachedHead=false",
+		"clone", "--depth", "1", "--filter=blob:none", "--sparse", "--single-branch",
+	}
+	if gh.Branch != "" {
+		args = append(args, "--branch", gh.Branch)
+	}
+	args = append(args, gh.CloneURL(), dir)
+	if _, err := Combined(args...); err != nil {
+		return "", "fetch", fmt.Sprintf("无法取得技能: %s", strings.TrimSpace(raw))
+	}
+	sparse := "skills"
+	if gh.Skill {
+		sparse = gh.SkillRel
+	}
+	if _, err := Combined("-C", dir, "sparse-checkout", "set", "--no-cone", "--", sparse); err != nil {
+		return "", "fetch", fmt.Sprintf("无法取得技能: %s", strings.TrimSpace(raw))
+	}
+	branch := gh.Branch
+	if branch == "" {
+		branch = Command(dir, "rev-parse", "--abbrev-ref", "HEAD")
+		if branch == "" || branch == "HEAD" {
+			return "", "fetch", fmt.Sprintf("无法取得技能: %s", strings.TrimSpace(raw))
+		}
+	}
+	return branch, "", ""
 }

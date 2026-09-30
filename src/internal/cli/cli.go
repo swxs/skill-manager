@@ -1312,7 +1312,7 @@ var commandHelp = map[string]string{
   skill-manager search <检索词>`,
 	"install": `安装技能到技能库
 
-本机目录按原样复制。Git 地址在 /tree/<分支>/ 之后还有路径时，只复制那一个技能文件夹。只到分支时，只取仓库 skills/ 的直接子目录。包里不留下 .git。
+本机目录按原样复制。Git 地址在 /tree/<分支>/ 之后还有路径时，只复制那一个技能文件夹。只到分支时，只取仓库 skills/ 的直接子目录。本机有 git 时浅克隆并只检出这些目录；没有 git 时从 GitHub 取这些目录。包里不留下 .git。
 
 用法:
   skill-manager install [--unlock] [--package <包名>] <本机目录或 Git URL>
