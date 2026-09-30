@@ -614,6 +614,41 @@ func TestRemoveDeletesExactEntryOnly(t *testing.T) {
 	}
 }
 
+func TestRemoveDropsDeclarationWhenPackIsGone(t *testing.T) {
+	root, _, library := withHome(t)
+	source := filepath.Join(root, "sources", "tavily")
+	writeSkill(t, filepath.Join(source, "search"))
+	repo := filepath.Join(root, "repo")
+	if err := os.Mkdir(repo, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if code, output := runCLI(t, library, "install", source); code != 0 {
+		t.Fatal(output)
+	}
+	if code, output := runCLI(t, library, "add", "--root", repo, "tavily"); code != 0 {
+		t.Fatal(output)
+	}
+	if err := os.RemoveAll(filepath.Join(library, "tavily")); err != nil {
+		t.Fatal(err)
+	}
+	code, output := runCLI(t, library, "remove", "--root", repo, "tavily")
+	if code != 0 || bytes.Contains([]byte(output), []byte("库中没有包")) || bytes.Contains([]byte(output), []byte("未修改配置")) {
+		t.Fatal(code, output)
+	}
+	raw, err := os.ReadFile(filepath.Join(repo, ".agents", "skills.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := jsonc.Parse(string(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	items, ok := got.([]any)
+	if !ok || len(items) != 0 {
+		t.Fatal(got)
+	}
+}
+
 func TestAddRejectsGitURL(t *testing.T) {
 	root, _, library := withHome(t)
 	repo := filepath.Join(root, "repo")

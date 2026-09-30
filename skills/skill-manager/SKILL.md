@@ -1,6 +1,6 @@
 ---
 name: skill-manager
-version: v0.5.3
+version: v0.5.4
 description: >-
   Manages the skill library at ~/.agents/skill-library and links skills
   from a workspace or global-workspace skills.json. Use when the user runs

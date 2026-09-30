@@ -708,8 +708,9 @@ func cmdAdd(library string, names []string, root string, useGlobal bool) int {
 	return 0
 }
 
-func cmdRemove(library string, names []string, root string, useGlobal bool) int {
-	if code := validateNames(library, names); code != 0 {
+func cmdRemove(names []string, root string, useGlobal bool) int {
+	if code := rejectRemoteSpecs(names); code != 0 {
+		fmt.Println("未修改配置")
 		return code
 	}
 	path, comment, existing, code := selectionFile(root, useGlobal)
@@ -1080,7 +1081,7 @@ func Main(argv []string) int {
 		if root == "" {
 			root = getwd()
 		}
-		return cmdRemove(library, names, root, global)
+		return cmdRemove(names, root, global)
 	case "lock":
 		return cmdLock(library)
 	case "list":
@@ -1364,7 +1365,7 @@ var commandHelp = map[string]string{
   写入全局工作区的技能声明。与 --root 同时出现时以全局工作区为准。`,
 	"remove": `移除技能声明
 
-从指定工作区的技能声明中移除技能。不连带删掉「包名:技能名」。技能须已在技能库中。可写多个；有一条对不上或不合法则全部不改。不删技能库里的包，也不改链接。
+从指定工作区的技能声明中移除技能。不连带删掉「包名:技能名」。库里没有该包也能移除。可写多个；有一条对不上或不合法则全部不改。不删技能库里的包，也不改链接。
 
 用法:
   skill-manager remove [--root <工作区>] [--global] <包名或包名:技能名>...
