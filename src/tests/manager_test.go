@@ -787,6 +787,41 @@ func TestInitDoesNotOverwriteExistingPack(t *testing.T) {
 	}
 }
 
+func TestLockAlignsKindAndListsEachSkill(t *testing.T) {
+	root, _, library := withHome(t)
+	writeSkill(t, filepath.Join(root, "sources", "ab"))
+	writeSkill(t, filepath.Join(root, "sources", "longer-name", "one"))
+	writeSkill(t, filepath.Join(root, "sources", "longer-name", "two"))
+	for _, name := range []string{"ab", "longer-name"} {
+		if code, output := runCLI(t, library, "install", filepath.Join(root, "sources", name)); code != 0 {
+			t.Fatal(output)
+		}
+	}
+	code, output := runCLI(t, library, "lock")
+	if code != 0 {
+		t.Fatal(output)
+	}
+	cols := map[string]int{}
+	for _, line := range bytes.Split([]byte(output), []byte("\n")) {
+		for _, kind := range []string{"single", "pack"} {
+			if bytes.Contains(line, []byte("  "+kind)) {
+				cols[kind] = bytes.Index(line, []byte(kind))
+			}
+		}
+	}
+	if _, ok := cols["single"]; !ok || cols["single"] != cols["pack"] {
+		t.Fatal(output)
+	}
+	for _, skill := range []string{"    ab", "    one", "    two"} {
+		if !bytes.Contains([]byte(output), []byte(skill+"\n")) {
+			t.Fatal(output)
+		}
+	}
+	if bytes.Contains([]byte(output), []byte(" +")) || bytes.Contains([]byte(output), []byte(",")) {
+		t.Fatal(output)
+	}
+}
+
 func TestListAlignsKindColumn(t *testing.T) {
 	root, _, library := withHome(t)
 	for _, name := range []string{"ab", "longer-name"} {

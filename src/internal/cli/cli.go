@@ -354,19 +354,38 @@ func printLibrary(library string) {
 		fmt.Println("  （空）")
 		return
 	}
+	type row struct {
+		name, kind, err string
+		skills          []string
+	}
+	rows := make([]row, 0, len(packs))
+	nameW, kindW := 0, 0
 	for _, name := range packs {
+		item := row{name: name}
 		info, err := lib.Inspect(filepath.Join(library, name))
 		if err != nil {
-			fmt.Printf("  %s  %s\n", name, err.Error())
+			item.err = err.Error()
+		} else {
+			item.kind = info.Kind
+			item.skills = info.Skills
+		}
+		rows = append(rows, item)
+		nameW = max(nameW, displayWidth(item.name))
+		kindW = max(kindW, displayWidth(item.kind))
+	}
+	for _, item := range rows {
+		if item.err != "" {
+			fmt.Printf("  %s  %s\n", padRight(item.name, nameW), item.err)
 			continue
 		}
-		preview := info.Skills
-		extra := ""
-		if len(preview) > 8 {
-			extra = fmt.Sprintf(" +%d", len(preview)-8)
-			preview = preview[:8]
+		fmt.Printf("  %s  %s\n", padRight(item.name, nameW), padRight(item.kind, kindW))
+		if len(item.skills) == 0 {
+			fmt.Println("    （无技能）")
+			continue
 		}
-		fmt.Printf("  %s  %s  %s%s\n", name, info.Kind, strings.Join(preview, ", "), extra)
+		for _, skill := range item.skills {
+			fmt.Printf("    %s\n", skill)
+		}
 	}
 }
 
