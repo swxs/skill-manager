@@ -151,6 +151,7 @@ func installGit(library, raw, packName string, unlock bool) int {
 	defer cleanup()
 	if kind != "" {
 		fmt.Fprintln(os.Stderr, line)
+		gitpack.AppendInstallLog(line)
 		if kind == "fetch" {
 			return 1
 		}
@@ -170,6 +171,7 @@ func installGit(library, raw, packName string, unlock bool) int {
 	created := !lib.IsDir(dest)
 	if created {
 		if err := os.MkdirAll(dest, 0o755); err != nil {
+			gitpack.AppendInstallLog("无法建立包目录: " + err.Error())
 			fmt.Fprintf(os.Stderr, "无法取得技能: %s\n", strings.TrimSpace(raw))
 			return 1
 		}
@@ -185,6 +187,7 @@ func installGit(library, raw, packName string, unlock bool) int {
 			if created {
 				_ = lib.RemoveTree(dest)
 			}
+			gitpack.AppendInstallLog("换入技能文件夹失败: " + err.Error())
 			fmt.Fprintf(os.Stderr, "无法取得技能: %s\n", strings.TrimSpace(raw))
 			return 1
 		}
@@ -231,12 +234,19 @@ func swapTree(src, dest string) error {
 	return nil
 }
 
-func installSpec(library, spec, packName string, unlock bool) int {
+func installSpec(library, spec, packName string, unlock bool) (code int) {
+	gitpack.BeginInstallLog()
+	defer gitpack.EndInstallLog()
+	gitpack.AppendInstallLog("安装 " + strings.TrimSpace(spec))
+	defer func() {
+		gitpack.AppendInstallLog(fmt.Sprintf("结束 %d", code))
+	}()
 	url, ref := gitpack.ParseSpec(spec)
 	local := lib.ExpandUser(url)
 	if lib.IsDir(local) {
 		if packName != "" {
 			fmt.Fprintln(os.Stderr, "本地路径不接受 --package")
+			gitpack.AppendInstallLog("本地路径不接受 --package")
 			return 2
 		}
 		return installLocal(library, local, ref, unlock)
@@ -246,9 +256,11 @@ func installSpec(library, spec, packName string, unlock bool) int {
 	}
 	if gitpack.IsURL(spec) || ref != "" {
 		fmt.Fprintf(os.Stderr, "无法从 URL 推导包名: %s\n", strings.TrimSpace(url))
+		gitpack.AppendInstallLog("无法从 URL 推导包名: " + strings.TrimSpace(url))
 		return 2
 	}
 	fmt.Printf("目录不存在: %s\n", lib.Resolve(local))
+	gitpack.AppendInstallLog("目录不存在: " + lib.Resolve(local))
 	return 2
 }
 
@@ -1332,7 +1344,7 @@ var commandHelp = map[string]string{
   skill-manager search <检索词>`,
 	"install": `安装技能到技能库
 
-本机目录按原样复制。Git 地址在 /tree/<分支>/ 之后还有路径时，只复制那一个技能文件夹。只到分支时，只取仓库 skills/ 的直接子目录。本机有 git 时浅克隆并只检出这些目录；没有 git 时从 GitHub 取这些目录。包里不留下 .git。
+本机目录按原样复制。Git 地址在 /tree/<分支>/ 之后还有路径时，只复制那一个技能文件夹。只到分支时，只取仓库 skills/ 的直接子目录。本机有 git 时浅克隆并只检出这些目录；没有 git 时从 GitHub 取这些目录。包里不留下 .git。过程追加写到系统临时目录的 skill-manager-install.log。
 
 用法:
   skill-manager install [--unlock] [--package <包名>] <本机目录或 Git URL>

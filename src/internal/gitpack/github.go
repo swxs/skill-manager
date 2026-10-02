@@ -219,6 +219,7 @@ func skillChildren(root string) ([]string, bool) {
 }
 
 func populateWithGit(dir string, gh GitHub, raw string) (string, string, string) {
+	AppendInstallLog("使用 git")
 	args := []string{
 		"-c", "core.autocrlf=false",
 		"-c", "advice.detachedHead=false",
@@ -228,22 +229,27 @@ func populateWithGit(dir string, gh GitHub, raw string) (string, string, string)
 		args = append(args, "--branch", gh.Branch)
 	}
 	args = append(args, gh.CloneURL(), dir)
-	if _, err := Combined(args...); err != nil {
+	if text, err := Combined(args...); err != nil {
+		AppendInstallLog("git " + strings.Join(args, " ") + "\n" + text)
 		return "", "fetch", fmt.Sprintf("无法取得技能: %s", strings.TrimSpace(raw))
 	}
+	AppendInstallLog("浅克隆完成")
 	sparse := "skills"
 	if gh.Skill {
 		sparse = gh.SkillRel
 	}
-	if _, err := Combined("-C", dir, "sparse-checkout", "set", "--no-cone", "--", sparse); err != nil {
+	if text, err := Combined("-C", dir, "sparse-checkout", "set", "--no-cone", "--", sparse); err != nil {
+		AppendInstallLog("git sparse-checkout set --no-cone -- " + sparse + "\n" + text)
 		return "", "fetch", fmt.Sprintf("无法取得技能: %s", strings.TrimSpace(raw))
 	}
 	branch := gh.Branch
 	if branch == "" {
 		branch = Command(dir, "rev-parse", "--abbrev-ref", "HEAD")
 		if branch == "" || branch == "HEAD" {
+			AppendInstallLog("无法解析分支")
 			return "", "fetch", fmt.Sprintf("无法取得技能: %s", strings.TrimSpace(raw))
 		}
 	}
+	AppendInstallLog("已检出 " + sparse + " 分支 " + branch)
 	return branch, "", ""
 }

@@ -39,6 +39,8 @@ func withHome(t *testing.T) (root, home, library string) {
 	}
 	t.Setenv("HOME", user)
 	t.Setenv("USERPROFILE", user)
+	gitpack.SetInstallLogForTest(filepath.Join(root, "install.log"))
+	t.Cleanup(func() { gitpack.SetInstallLogForTest("") })
 	return root, home, library
 }
 

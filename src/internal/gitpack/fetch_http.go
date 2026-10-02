@@ -58,9 +58,11 @@ type ghBlob struct {
 }
 
 func populateWithHTTP(dir string, gh GitHub, raw string) (string, string, string) {
+	AppendInstallLog("使用 GitHub 接口")
 	client := &http.Client{Timeout: 60 * time.Second}
 	branch, commit, root, err := resolveTip(client, gh)
 	if err != nil {
+		noteInstallErr(err)
 		return "", "fetch", fmt.Sprintf("无法取得技能: %s", strings.TrimSpace(raw))
 	}
 	rel := "skills"
@@ -69,19 +71,31 @@ func populateWithHTTP(dir string, gh GitHub, raw string) (string, string, string
 	}
 	treeSHA, err := findTree(client, gh, root, rel)
 	if err == errNotInTree {
+		AppendInstallLog("目录不在树中 " + rel)
 		return branch, "", ""
 	}
 	if err != nil {
+		noteInstallErr(err)
 		return "", "fetch", fmt.Sprintf("无法取得技能: %s", strings.TrimSpace(raw))
 	}
 	var files []ghBlob
 	if err := collectBlobs(client, gh, treeSHA, rel, &files); err != nil {
+		noteInstallErr(err)
 		return "", "fetch", fmt.Sprintf("无法取得技能: %s", strings.TrimSpace(raw))
 	}
 	if err := downloadBlobs(client, gh, commit, dir, files); err != nil {
+		noteInstallErr(err)
 		return "", "fetch", fmt.Sprintf("无法取得技能: %s", strings.TrimSpace(raw))
 	}
+	AppendInstallLog("已从 GitHub 取得 " + rel + " 分支 " + branch)
 	return branch, "", ""
+}
+
+func noteInstallErr(err error) {
+	if err == nil || strings.HasPrefix(err.Error(), "HTTP ") {
+		return
+	}
+	AppendInstallLog(err.Error())
 }
 
 func resolveTip(client *http.Client, gh GitHub) (string, string, string, error) {
@@ -216,6 +230,8 @@ func downloadBlob(ctx context.Context, client *http.Client, gh GitHub, commit, d
 	}
 	defer res.Body.Close()
 	if res.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(res.Body, 512))
+		noteHTTPFailure(rawFileURL(gh, commit, file.rel), res, body)
 		return fmt.Errorf("HTTP %d", res.StatusCode)
 	}
 	target := filepath.Join(dest, filepath.FromSlash(file.rel))
@@ -265,9 +281,35 @@ func getJSON(client *http.Client, rawURL string, dest any) error {
 		return err
 	}
 	if res.StatusCode != http.StatusOK {
+		noteHTTPFailure(rawURL, res, body)
 		return fmt.Errorf("HTTP %d", res.StatusCode)
 	}
 	return json.Unmarshal(body, dest)
+}
+
+func noteHTTPFailure(rawURL string, res *http.Response, body []byte) {
+	var b strings.Builder
+	fmt.Fprintf(&b, "GET %s\nHTTP %d", rawURL, res.StatusCode)
+	for _, key := range []string{
+		"Retry-After",
+		"X-RateLimit-Limit",
+		"X-RateLimit-Remaining",
+		"X-RateLimit-Reset",
+		"X-RateLimit-Resource",
+		"X-RateLimit-Used",
+	} {
+		if value := res.Header.Get(key); value != "" {
+			fmt.Fprintf(&b, "\n%s: %s", key, value)
+		}
+	}
+	text := strings.TrimSpace(string(body))
+	if len(text) > 500 {
+		text = text[:500]
+	}
+	if text != "" {
+		fmt.Fprintf(&b, "\n%s", text)
+	}
+	AppendInstallLog(b.String())
 }
 
 func applyGitHubHeaders(req *http.Request, accept string) {
