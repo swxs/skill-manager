@@ -5,8 +5,7 @@ __pycache__/
 *.pyc
 .venv/
 
-/runtime/
-skills/skill-manager/runtime/
+skills/skill-manager/bin/
 
 .scratch/*
 !.scratch/README.md

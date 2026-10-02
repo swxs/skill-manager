@@ -1,5 +1,5 @@
 #!/bin/sh
-# POSIX launcher. Runs runtime/ when its recorded version matches SKILL.md.
+# POSIX launcher. Runs bin/skill-manager when its recorded version matches SKILL.md.
 # Otherwise download that version's platform zip, unpack the runtime,
 # and check it against checksums.txt before replacing and executing.
 set -eu
@@ -35,9 +35,9 @@ case "$(uname -m)" in
 esac
 
 name="skill-manager-${goos}-${goarch}"
-runtime_dir="$skill_root/runtime"
-dest="$runtime_dir/$name"
-version_file="$runtime_dir/version"
+bin_dir="$skill_root/bin"
+dest="$bin_dir/skill-manager"
+version_file="$bin_dir/version"
 recorded=""
 if [ -f "$version_file" ]; then
     recorded=$(awk 'NR == 1 { sub(/\r$/, ""); print; exit }' "$version_file")
@@ -62,9 +62,9 @@ if [ ! -f "$dest" ] || [ -z "$version" ] || [ "$recorded" != "$version" ]; then
     if ! unzip -q "$tmp/pkg.zip" -d "$tmp/unpack"; then
         fail "下载失败: $zip_url"
     fi
-    found=$(find "$tmp/unpack" -type f -name "$name" | head -n 1)
-    if [ -z "$found" ]; then
-        fail "没有这一版的运行时: $name"
+    found="$tmp/unpack/bin/skill-manager"
+    if [ ! -f "$found" ]; then
+        fail "没有这一版的运行时: skill-manager"
     fi
     if command -v sha256sum >/dev/null 2>&1; then
         got=$(sha256sum "$found" | awk '{ print tolower($1) }')
@@ -79,7 +79,7 @@ if [ ! -f "$dest" ] || [ -z "$version" ] || [ "$recorded" != "$version" ]; then
     if [ -z "$want" ] || [ "$want" != "$got" ]; then
         fail "校验和不符: $name"
     fi
-    mkdir -p "$runtime_dir"
+    mkdir -p "$bin_dir"
     cp "$found" "$dest"
     printf '%s\n' "$version" > "$version_file"
     rm -rf "$tmp"

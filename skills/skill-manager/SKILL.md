@@ -25,16 +25,16 @@ disable-model-invocation: true
 Windows：
 
 ```powershell
-powershell -NoProfile -File "$env:USERPROFILE\.agents\skills\skill-manager\scripts\skill-manager.ps1" <命令>
+& "$env:USERPROFILE\.agents\skills\skill-manager\bin\skill-manager.exe" <命令>
 ```
 
 macOS / Linux：
 
 ```bash
-~/.agents/skills/skill-manager/scripts/skill-manager <命令>
+~/.agents/skills/skill-manager/bin/skill-manager <命令>
 ```
 
-脚本名后面的参数原样交给运行时。旗标以 `skill-manager <命令> --help` 为准。
+参数原样交给运行时。旗标以 `skill-manager <命令> --help` 为准。
 
 `--root` 传包含该工作区的目录，也就是 `.agents/` 的上一级。当前窗口里每个这样的目录各传一次。不写则用当前目录。
 `--global` 与 `--root` 同时出现时以全局工作区为准。

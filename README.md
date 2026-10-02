@@ -28,7 +28,7 @@
 
 目标目录都是 `~/.agents/skills/skill-manager`。
 
-下载 [GitHub Release](https://github.com/swxs/skill-manager/releases) 里当前平台的 zip，解压到这个目录。压缩包根上已经有 `SKILL.md`、两条启动脚本，以及 `runtime/` 下的运行时，解压后即可使用。
+下载 [GitHub Release](https://github.com/swxs/skill-manager/releases) 里当前平台的 zip，解压到这个目录。压缩包根上已经有 `SKILL.md`、两条启动脚本，以及 `bin/` 下的运行时和 `version`，解压后即可使用。
 
 克隆仓库时放到普通项目目录，不要放到 `~/.agents/skills/skill-manager`：
 
@@ -36,7 +36,7 @@
 git clone https://github.com/swxs/skill-manager.git
 ```
 
-换版本时，zip 安装是覆盖整个技能目录，压缩包里的 `runtime/version` 与 `SKILL.md` 一致。同一版本的发布文件被替换时，已记下的运行时不会更新。
+换版本时，zip 安装是覆盖整个技能目录，压缩包里的 `bin/version` 与 `SKILL.md` 一致。同一版本的发布文件被替换时，已记下的运行时不会更新。
 
 ## 命令
 
@@ -120,7 +120,7 @@ macOS / Linux：
 
 | 能力 | Windows | macOS / Linux |
 | --- | --- | --- |
-| 运行时 | `runtime/skill-manager-windows-<架构>.exe` | `runtime/skill-manager-<系统>-<架构>` |
+| 运行时 | `bin/skill-manager.exe` | `bin/skill-manager` |
 | 符号链接 | 优先尝试 | 优先尝试 |
 | 目录联接 | 符号链接失败时兜底 | 不使用 |
 | 持续集成 | `windows-latest` 上的 `go test` | `ubuntu-latest` 上的 `go test` |

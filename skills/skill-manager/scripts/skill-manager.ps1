@@ -1,4 +1,4 @@
-﻿# Windows launcher. Runs runtime/ when its recorded version matches SKILL.md.
+﻿# Windows launcher. Runs bin/skill-manager.exe when its recorded version matches SKILL.md.
 # Otherwise download that version's platform zip, unpack the runtime,
 # and check it against checksums.txt before replacing and executing.
 $ErrorActionPreference = "Stop"
@@ -32,9 +32,9 @@ switch ($env:PROCESSOR_ARCHITECTURE) {
     default { $arch = $env:PROCESSOR_ARCHITECTURE.ToLowerInvariant() }
 }
 $name = "skill-manager-windows-$arch.exe"
-$runtimeDir = Join-Path $skillRoot "runtime"
-$dest = Join-Path $runtimeDir $name
-$versionFile = Join-Path $runtimeDir "version"
+$binDir = Join-Path $skillRoot "bin"
+$dest = Join-Path $binDir "skill-manager.exe"
+$versionFile = Join-Path $binDir "version"
 $recorded = ""
 if (Test-Path -LiteralPath $versionFile) {
     $recorded = ([System.IO.File]::ReadAllText($versionFile)).Trim()
@@ -69,11 +69,11 @@ if (-not ((Test-Path -LiteralPath $dest) -and $version -and ($recorded -eq $vers
         } catch {
             Fail "下载失败: $zipUrl"
         }
-        $found = Get-ChildItem -LiteralPath $unpack -Recurse -File -Filter $name | Select-Object -First 1
-        if (-not $found) {
-            Fail "没有这一版的运行时: $name"
+        $foundPath = Join-Path $unpack "bin\skill-manager.exe"
+        if (-not (Test-Path -LiteralPath $foundPath)) {
+            Fail "没有这一版的运行时: skill-manager.exe"
         }
-        $got = (Get-FileHash -Algorithm SHA256 -LiteralPath $found.FullName).Hash.ToLowerInvariant()
+        $got = (Get-FileHash -Algorithm SHA256 -LiteralPath $foundPath).Hash.ToLowerInvariant()
         $want = ""
         foreach ($row in (Get-Content -LiteralPath $sumPath)) {
             $row = $row.Trim()
@@ -85,8 +85,8 @@ if (-not ((Test-Path -LiteralPath $dest) -and $version -and ($recorded -eq $vers
         if (-not $want -or $want -ne $got) {
             Fail "校验和不符: $name"
         }
-        New-Item -ItemType Directory -Force -Path $runtimeDir | Out-Null
-        Copy-Item -LiteralPath $found.FullName -Destination $dest -Force
+        New-Item -ItemType Directory -Force -Path $binDir | Out-Null
+        Copy-Item -LiteralPath $foundPath -Destination $dest -Force
         $utf8 = New-Object System.Text.UTF8Encoding $false
         [System.IO.File]::WriteAllText($versionFile, "$version`n", $utf8)
     } finally {

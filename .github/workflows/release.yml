@@ -65,13 +65,17 @@ jobs:
               ext=".exe"
             fi
             name="skill-manager-${os}-${arch}${ext}"
+            inner="skill-manager"
+            if [ "$os" = "windows" ]; then
+              inner="skill-manager.exe"
+            fi
             stage=$(mktemp -d)
             cp skills/skill-manager/SKILL.md "$stage/SKILL.md"
-            mkdir -p "$stage/scripts" "$stage/runtime"
+            mkdir -p "$stage/scripts" "$stage/bin"
             cp skills/skill-manager/scripts/skill-manager skills/skill-manager/scripts/skill-manager.ps1 "$stage/scripts/"
             chmod +x "$stage/scripts/skill-manager"
-            cp "dist/bin/$name" "$stage/runtime/$name"
-            printf '%s\n' "$GITHUB_REF_NAME" > "$stage/runtime/version"
+            cp "dist/bin/$name" "$stage/bin/$inner"
+            printf '%s\n' "$GITHUB_REF_NAME" > "$stage/bin/version"
             (
               cd "$stage"
               zip -r "$root/dist/zips/skill-manager-${os}-${arch}.zip" .

@@ -14,7 +14,7 @@
 ├── skills/skill-manager/    技能正文与启动脚本。发布时摊平到技能目录根
 │   ├── SKILL.md
 │   ├── scripts/
-│   └── runtime/             本地编出来的运行时，不进版本库
+│   └── bin/                 本地编出来的运行时，不进版本库
 ├── CONTEXT.md               术语
 ├── README.md                给人看的用法
 ├── src/

@@ -5,6 +5,7 @@
 - `remove` 在技能库里没有该包时仍从技能声明删掉对应条目
 - `lock` 按包名、类型对齐，每个技能各占一行
 - `install` 把取文件过程追加写到系统临时目录的 `skill-manager-install.log`
+- 发布 zip 里运行时与 `version` 放在 `bin/`。Unix 文件名为 `skill-manager`，Windows 为 `skill-manager.exe`。zip 文件名不变
 
 ## [0.5.3] - 未发布
 
