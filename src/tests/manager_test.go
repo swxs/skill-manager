@@ -923,6 +923,11 @@ func TestPackageNameRules(t *testing.T) {
 		{"https://github.com/anthropics/skills", "anthropics"},
 		{"https://github.com/anthropics/skills.git", "anthropics"},
 		{"https://github.com/anthropics/skills/tree/main/skills/foo", "anthropics"},
+		{"https://code.idiaoyan.cn/xm/xm-agent-skills/-/tree/main/", "xm-agent"},
+		{"https://code.idiaoyan.cn/org/team/skills/-/tree/main", "team"},
+		{"https://example.com/acme/widgets", "widgets"},
+		{"https://example.com/acme/widgets.git", "widgets"},
+		{"https://git.example.com/acme/widgets/tree/main/skills/foo", "widgets"},
 	}
 	for _, tc := range cases {
 		code, out, errOut := runCLIStreams(t, library, "package-name", tc.url)
@@ -933,6 +938,102 @@ func TestPackageNameRules(t *testing.T) {
 	code, out, errOut := runCLIStreams(t, library, "package-name", "https://example.com/foo")
 	if code != 2 || out != "" || errOut != "无法从 URL 推导包名: https://example.com/foo\n" {
 		t.Fatalf("code %d out %q err %q", code, out, errOut)
+	}
+}
+
+func TestInstallGitLabTreeAndUpgrade(t *testing.T) {
+	root, _, library := withHome(t)
+	upstream := filepath.Join(root, "upstream")
+	writeSkill(t, filepath.Join(upstream, "skills", "alpha"))
+	writeSkill(t, filepath.Join(upstream, "skills", "beta"))
+	initGitRepo(t, upstream)
+	prefix := "https://code.idiaoyan.cn/xm/xm-agent-skills"
+	pointGitHubAt(t, upstream, prefix)
+	raw := prefix + "/-/tree/main/"
+	code, out, errOut := runCLIStreams(t, library, "install", raw)
+	if code != 0 || errOut != "" {
+		t.Fatalf("code %d out %q err %q", code, out, errOut)
+	}
+	if lib.IsDir(filepath.Join(library, "xm-agent", ".git")) {
+		t.Fatal("package kept .git")
+	}
+	if _, err := os.Stat(filepath.Join(library, "xm-agent", "alpha", "SKILL.md")); err != nil {
+		t.Fatal(err)
+	}
+	rawLock, err := os.ReadFile(filepath.Join(library, ".skill-lock.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var lock map[string]any
+	if err := json.Unmarshal(rawLock, &lock); err != nil {
+		t.Fatal(err)
+	}
+	pack := lock["packs"].(map[string]any)["xm-agent"].(map[string]any)
+	skills := pack["skills"].(map[string]any)
+	want := prefix + "/-/tree/main/skills/alpha"
+	if skills["alpha"] != want || skills["beta"] != prefix+"/-/tree/main/skills/beta" {
+		t.Fatal(skills)
+	}
+	if err := os.WriteFile(filepath.Join(upstream, "skills", "alpha", "SKILL.md"), []byte("---\nname: alpha\n---\nnext\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	git(t, upstream, "add", ".")
+	git(t, upstream, "commit", "-m", "next")
+	code, out, errOut = runCLIStreams(t, library, "upgrade", "xm-agent:alpha")
+	if code != 0 || errOut != "" || !bytes.Contains([]byte(out), []byte("已升级 xm-agent:alpha")) {
+		t.Fatalf("upgrade code %d out %q err %q", code, out, errOut)
+	}
+	text, err := os.ReadFile(filepath.Join(library, "xm-agent", "alpha", "SKILL.md"))
+	if err != nil || !bytes.Contains(text, []byte("next")) {
+		t.Fatalf("%s %v", text, err)
+	}
+}
+
+func TestInstallOtherHostTreePath(t *testing.T) {
+	root, _, library := withHome(t)
+	upstream := filepath.Join(root, "upstream")
+	writeSkill(t, filepath.Join(upstream, "skills", "alpha"))
+	writeSkill(t, filepath.Join(upstream, "skills", "beta"))
+	initGitRepo(t, upstream)
+	prefix := "https://git.example.com/acme/widgets"
+	pointGitHubAt(t, upstream, prefix)
+	raw := prefix + "/tree/main/skills/alpha"
+	code, _, errOut := runCLIStreams(t, library, "install", raw)
+	if code != 0 || errOut != "" {
+		t.Fatalf("code %d err %q", code, errOut)
+	}
+	if _, err := os.Stat(filepath.Join(library, "widgets", "alpha", "SKILL.md")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(library, "widgets", "beta")); !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+	rawLock, err := os.ReadFile(filepath.Join(library, ".skill-lock.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var lock map[string]any
+	if err := json.Unmarshal(rawLock, &lock); err != nil {
+		t.Fatal(err)
+	}
+	pack := lock["packs"].(map[string]any)["widgets"].(map[string]any)
+	skills := pack["skills"].(map[string]any)
+	if skills["alpha"] != raw {
+		t.Fatal(skills)
+	}
+}
+
+func TestInstallNonGitHubNeedsGit(t *testing.T) {
+	_, _, library := withHome(t)
+	gitpack.SetFetchForTest(false, "", "")
+	t.Cleanup(func() { gitpack.SetFetchForTest(true, "", "") })
+	raw := "https://code.idiaoyan.cn/xm/xm-agent-skills/-/tree/main/"
+	code, out, errOut := runCLIStreams(t, library, "install", raw)
+	if code != 2 || out != "" || errOut != "没有 git，无法取得技能: "+raw+"\n" {
+		t.Fatalf("code %d out %q err %q", code, out, errOut)
+	}
+	if _, err := os.Stat(filepath.Join(library, "xm-agent")); !os.IsNotExist(err) {
+		t.Fatal(err)
 	}
 }
 

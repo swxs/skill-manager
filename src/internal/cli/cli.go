@@ -127,13 +127,13 @@ func installLocal(library, src, ref string, unlock bool) int {
 }
 
 func installGit(library, raw, packName string, unlock bool) int {
-	gh, err := gitpack.ParseGitHub(raw)
+	remote, err := gitpack.ParseRemote(raw)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "无法从 URL 推导包名: %s\n", strings.TrimSpace(raw))
 		return 2
 	}
 	if packName == "" {
-		packName, err = gitpack.PackageName(gh.Owner, gh.Repo)
+		packName, err = gitpack.PackageName(remote.Owner, remote.Repo)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "无法从 URL 推导包名: %s\n", strings.TrimSpace(raw))
 			return 2
@@ -251,7 +251,7 @@ func installSpec(library, spec, packName string, unlock bool) (code int) {
 		}
 		return installLocal(library, local, ref, unlock)
 	}
-	if _, err := gitpack.ParseGitHub(url); err == nil {
+	if _, err := gitpack.ParseRemote(url); err == nil {
 		return installGit(library, url, packName, unlock)
 	}
 	if gitpack.IsURL(spec) || ref != "" {
@@ -1234,12 +1234,12 @@ func cmdPackageName(args []string) int {
 		fmt.Fprintln(os.Stderr, "package-name 需要一个 Git 地址")
 		return 2
 	}
-	gh, err := gitpack.ParseGitHub(args[0])
+	remote, err := gitpack.ParseRemote(args[0])
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "无法从 URL 推导包名: %s\n", strings.TrimSpace(args[0]))
 		return 2
 	}
-	name, err := gitpack.PackageName(gh.Owner, gh.Repo)
+	name, err := gitpack.PackageName(remote.Owner, remote.Repo)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "无法从 URL 推导包名: %s\n", strings.TrimSpace(args[0]))
 		return 2
@@ -1344,7 +1344,7 @@ var commandHelp = map[string]string{
   skill-manager search <检索词>`,
 	"install": `安装技能到技能库
 
-本机目录按原样复制。Git 地址在 /tree/<分支>/ 之后还有路径时，只复制那一个技能文件夹。只到分支时，只取仓库 skills/ 的直接子目录。本机有 git 时浅克隆并只检出这些目录；没有 git 时从 GitHub 取这些目录。包里不留下 .git。过程追加写到系统临时目录的 skill-manager-install.log。
+本机目录按原样复制。Git 地址在 /tree/<分支>/ 或 /-/tree/<分支>/ 之后还有路径时，只复制那一个技能文件夹。只到分支时，只取仓库 skills/ 的直接子目录。本机有 git 时浅克隆并只检出这些目录，也可以装 GitHub 以外的 https 仓库。没有 git 时只从 GitHub 取这些目录。包里不留下 .git。过程追加写到系统临时目录的 skill-manager-install.log。
 
 用法:
   skill-manager install [--unlock] [--package <包名>] <本机目录或 Git URL>

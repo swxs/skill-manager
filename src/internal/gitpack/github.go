@@ -132,14 +132,17 @@ type Drop struct {
 	URL  string
 }
 
-// Fetch 把要复制的技能文件夹放进临时目录。本机有 git 时浅克隆并只检出这些目录，没有 git 时从 GitHub 接口取。调用方负责 cleanup。
+// Fetch 把要复制的技能文件夹放进临时目录。本机有 git 时浅克隆并只检出这些目录，没有 git 时只从 GitHub 接口取。调用方负责 cleanup。
 func Fetch(raw string) (cleanup func(), drops []Drop, kind string, line string) {
-	gh, err := ParseGitHub(raw)
+	remote, err := ParseRemote(raw)
 	if err != nil {
 		return func() {}, nil, "name", fmt.Sprintf("无法从 URL 推导包名: %s", strings.TrimSpace(raw))
 	}
-	if _, err := PackageName(gh.Owner, gh.Repo); err != nil {
+	if _, err := PackageName(remote.Owner, remote.Repo); err != nil {
 		return func() {}, nil, "name", fmt.Sprintf("无法从 URL 推导包名: %s", strings.TrimSpace(raw))
+	}
+	if !remote.GitHub && !gitAvailable() {
+		return func() {}, nil, "nogit", fmt.Sprintf("没有 git，无法取得技能: %s", strings.TrimSpace(raw))
 	}
 	dir, err := os.MkdirTemp("", "skill-manager-")
 	if err != nil {
@@ -147,22 +150,23 @@ func Fetch(raw string) (cleanup func(), drops []Drop, kind string, line string) 
 	}
 	cleanup = func() { _ = os.RemoveAll(dir) }
 	var branch string
-	if gitAvailable() {
-		branch, kind, line = populateWithGit(dir, gh, raw)
-	} else {
+	if remote.GitHub && !gitAvailable() {
+		gh := GitHub{Owner: remote.Owner, Repo: remote.Repo, Branch: remote.Branch, SkillRel: remote.SkillRel, Skill: remote.Skill}
 		branch, kind, line = populateWithHTTP(dir, gh, raw)
+	} else {
+		branch, kind, line = populateWithGit(dir, remote, raw)
 	}
 	if kind != "" {
 		cleanup()
 		return func() {}, nil, kind, line
 	}
-	if gh.Skill {
-		skillDir := filepath.Join(dir, filepath.FromSlash(gh.SkillRel))
+	if remote.Skill {
+		skillDir := filepath.Join(dir, filepath.FromSlash(remote.SkillRel))
 		if !lib.IsFile(filepath.Join(skillDir, "SKILL.md")) {
 			cleanup()
 			return func() {}, nil, "noskill", fmt.Sprintf("目录没有 SKILL.md: %s", strings.TrimSpace(raw))
 		}
-		name := gh.SkillName()
+		name := remote.SkillName()
 		if !lib.ValidName(name) {
 			cleanup()
 			return func() {}, nil, "name", fmt.Sprintf("无法从 URL 推导包名: %s", strings.TrimSpace(raw))
@@ -170,7 +174,7 @@ func Fetch(raw string) (cleanup func(), drops []Drop, kind string, line string) 
 		return cleanup, []Drop{{
 			Name: name,
 			Dir:  skillDir,
-			URL:  gh.Recorded(branch, name),
+			URL:  remote.Recorded(branch, name),
 		}}, "", ""
 	}
 	children, bad := skillChildren(dir)
@@ -183,7 +187,7 @@ func Fetch(raw string) (cleanup func(), drops []Drop, kind string, line string) 
 		drops = append(drops, Drop{
 			Name: name,
 			Dir:  filepath.Join(dir, "skills", name),
-			URL:  gh.Recorded(branch, name),
+			URL:  remote.Recorded(branch, name),
 		})
 	}
 	return cleanup, drops, "", ""
@@ -218,31 +222,31 @@ func skillChildren(root string) ([]string, bool) {
 	return names, false
 }
 
-func populateWithGit(dir string, gh GitHub, raw string) (string, string, string) {
+func populateWithGit(dir string, remote Remote, raw string) (string, string, string) {
 	AppendInstallLog("使用 git")
 	args := []string{
 		"-c", "core.autocrlf=false",
 		"-c", "advice.detachedHead=false",
 		"clone", "--depth", "1", "--filter=blob:none", "--sparse", "--single-branch",
 	}
-	if gh.Branch != "" {
-		args = append(args, "--branch", gh.Branch)
+	if remote.Branch != "" {
+		args = append(args, "--branch", remote.Branch)
 	}
-	args = append(args, gh.CloneURL(), dir)
+	args = append(args, remote.Clone, dir)
 	if text, err := Combined(args...); err != nil {
 		AppendInstallLog("git " + strings.Join(args, " ") + "\n" + text)
 		return "", "fetch", fmt.Sprintf("无法取得技能: %s", strings.TrimSpace(raw))
 	}
 	AppendInstallLog("浅克隆完成")
 	sparse := "skills"
-	if gh.Skill {
-		sparse = gh.SkillRel
+	if remote.Skill {
+		sparse = remote.SkillRel
 	}
 	if text, err := Combined("-C", dir, "sparse-checkout", "set", "--no-cone", "--", sparse); err != nil {
 		AppendInstallLog("git sparse-checkout set --no-cone -- " + sparse + "\n" + text)
 		return "", "fetch", fmt.Sprintf("无法取得技能: %s", strings.TrimSpace(raw))
 	}
-	branch := gh.Branch
+	branch := remote.Branch
 	if branch == "" {
 		branch = Command(dir, "rev-parse", "--abbrev-ref", "HEAD")
 		if branch == "" || branch == "HEAD" {
