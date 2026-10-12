@@ -204,20 +204,41 @@ func (s *skillLock) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+// CloneRef 是一次克隆：仓库地址加分支。不写入锁定。
+type CloneRef struct {
+	Clone  string
+	Branch string
+}
+
+// SourceURL 是锁定里的一条安装地址。Kind 为 pack 或 pick。
+type SourceURL struct {
+	URL  string `json:"url"`
+	Kind string `json:"kind"`
+}
+
 type lockEntry struct {
 	Kind   string               `json:"kind"`
+	URL    []SourceURL          `json:"url,omitempty"`
 	Skills map[string]skillLock `json:"skills"`
 }
 
 func (e *lockEntry) UnmarshalJSON(data []byte) error {
 	var raw struct {
 		Kind   string          `json:"kind"`
+		URL    []SourceURL     `json:"url"`
 		Skills json.RawMessage `json:"skills"`
 	}
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return err
 	}
 	e.Kind = raw.Kind
+	e.URL = nil
+	for _, item := range raw.URL {
+		if item.URL == "" || (item.Kind != "pack" && item.Kind != "pick") {
+			continue
+		}
+		e.URL = append(e.URL, item)
+	}
 	e.Skills = map[string]skillLock{}
 	if len(raw.Skills) == 0 || string(raw.Skills) == "null" {
 		return nil
@@ -274,8 +295,8 @@ func PackDirs(library string) ([]string, error) {
 }
 
 // WriteLock 按磁盘重写锁定。overrides 是这次要写下的 包名 → 技能名 → 安装地址。
-// 没出现在 overrides 里的技能沿用上次的地址。没有地址的不写入。不读包里的 .git。
-func WriteLock(library string, overrides map[string]map[string]string, hashes map[string]map[string]string, kinds map[string]string, recompute bool) error {
+// sources 是这次要追加的安装地址，已有的同地址保留。没有地址的技能不写入。不读包里的 .git。
+func WriteLock(library string, overrides map[string]map[string]string, hashes map[string]map[string]string, sources map[string]SourceURL, recompute bool) error {
 	if err := os.MkdirAll(library, 0o755); err != nil {
 		return err
 	}
@@ -335,19 +356,16 @@ func WriteLock(library string, overrides map[string]map[string]string, hashes ma
 			}
 			skills[skill] = skillLock{URL: url, Hash: hash}
 		}
-		kind := ""
-		if kinds != nil {
-			kind = kinds[name]
+		var urls []SourceURL
+		if prev, ok := previous.Packs[name]; ok {
+			urls = append(urls, prev.URL...)
 		}
-		if kind == "" && previous.Version >= lockVersion {
-			if prev, ok := previous.Packs[name]; ok {
-				kind = prev.Kind
+		if sources != nil {
+			if add, ok := sources[name]; ok && add.URL != "" && (add.Kind == "pack" || add.Kind == "pick") && !hasSource(urls, add.URL) {
+				urls = append(urls, SourceURL{URL: add.URL, Kind: add.Kind})
 			}
 		}
-		if kind == "" {
-			kind = deriveKind(name, skills, info.Kind)
-		}
-		packs[name] = lockEntry{Kind: kind, Skills: skills}
+		packs[name] = lockEntry{Kind: outerKind(skills, urls), URL: urls, Skills: skills}
 	}
 	payload, err := json.MarshalIndent(lockFile{Version: lockVersion, Packs: packs}, "", "  ")
 	if err != nil {
@@ -356,51 +374,59 @@ func WriteLock(library string, overrides map[string]map[string]string, hashes ma
 	return lib.WriteLF(LockPath(library), string(payload)+"\n")
 }
 
-// SelectsSkill 表示这条地址是在技能集合里指定了某一个技能。
-func SelectsSkill(rel string) bool {
-	return rel == "skills" || strings.HasPrefix(rel, "skills/") || strings.Contains(rel, "/skills/")
-}
-
-func deriveKind(packName string, skills map[string]skillLock, structural string) string {
-	n := 0
-	onlyName := ""
-	onlyURL := ""
-	for name, skill := range skills {
-		if skill.URL == "" {
-			continue
-		}
-		n++
-		onlyName = name
-		onlyURL = skill.URL
+func outerKind(skills map[string]skillLock, urls []SourceURL) string {
+	if len(urls) > 0 {
+		return "remote"
 	}
-	if n == 0 {
-		return "locale"
-	}
-	if structural == "mixed" {
-		return "mixed"
-	}
-	if n == 1 && onlyName != packName {
-		remote, err := ParseRemote(onlyURL)
-		if err == nil && SelectsSkill(remote.SkillRel) {
-			return "single"
+	for _, skill := range skills {
+		if skill.URL != "" {
+			return "remote"
 		}
 	}
-	return "pack"
+	return "locale"
 }
 
-// EffectiveKind 在锁定尚未写成新版本时按安装地址推导，否则用记下的类型。
+func RefOf(raw string) (CloneRef, bool) {
+	remote, err := ParseRemote(raw)
+	if err != nil || remote.Clone == "" || remote.Branch == "" {
+		return CloneRef{}, false
+	}
+	return CloneRef{Clone: remote.Clone, Branch: remote.Branch}, true
+}
+
+func hasSource(items []SourceURL, raw string) bool {
+	for _, item := range items {
+		if SameURL(item.URL, raw) {
+			return true
+		}
+	}
+	return false
+}
+
+// PackSources 返回这个包记下的安装地址。
+func PackSources(library, packName string) []SourceURL {
+	data := readLock(library)
+	entry, ok := data.Packs[packName]
+	if !ok {
+		return nil
+	}
+	return append([]SourceURL(nil), entry.URL...)
+}
+
+// EffectiveKind 是列表里要显示的 remote 或 locale。
 func EffectiveKind(library, packName string) string {
 	data := readLock(library)
 	entry, ok := data.Packs[packName]
-	info, _ := lib.Inspect(filepath.Join(library, packName))
-	if ok && data.Version >= lockVersion && entry.Kind != "" {
+	if ok && (entry.Kind == "remote" || entry.Kind == "locale") {
 		return entry.Kind
 	}
 	skills := map[string]skillLock{}
+	var urls []SourceURL
 	if ok {
 		skills = entry.Skills
+		urls = entry.URL
 	}
-	return deriveKind(packName, skills, info.Kind)
+	return outerKind(skills, urls)
 }
 
 func SkillURL(library, pack, skill string) string {

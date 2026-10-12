@@ -148,6 +148,18 @@ func (r Remote) SkillName() string {
 	return GitHub{SkillRel: r.SkillRel}.SkillName()
 }
 
+// At 是分支上某条仓库内路径的页面地址。
+func (r Remote) At(branch, rel string) string {
+	if r.GitHub {
+		return "https://github.com/" + r.Owner + "/" + r.Repo + "/tree/" + branch + "/" + rel
+	}
+	sep := "/tree/"
+	if r.SlashTree {
+		sep = "/-/tree/"
+	}
+	return r.Web + sep + branch + "/" + rel
+}
+
 func (r Remote) Recorded(branch, skillName string) string {
 	if r.GitHub {
 		return GitHub{

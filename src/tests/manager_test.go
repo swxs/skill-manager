@@ -1122,7 +1122,8 @@ func TestSpecifiedSkillIsSingleAndSkipsNew(t *testing.T) {
 	}
 	lock := readLockMap(t, library)
 	pack := lock["packs"].(map[string]any)["openclaw"].(map[string]any)
-	if pack["kind"] != "single" {
+	urls, _ := pack["url"].([]any)
+	if pack["kind"] != "remote" || len(urls) != 1 || urls[0].(map[string]any)["kind"] != "pick" || urls[0].(map[string]any)["url"] != raw {
 		t.Fatal(pack)
 	}
 	writeSkill(t, filepath.Join(upstream, "skills", "gamma"))
@@ -1152,7 +1153,8 @@ func TestPackUpgradeInstallsNewSkill(t *testing.T) {
 	}
 	lock := readLockMap(t, library)
 	pack := lock["packs"].(map[string]any)["archify"].(map[string]any)
-	if pack["kind"] != "pack" {
+	urls, _ := pack["url"].([]any)
+	if pack["kind"] != "remote" || len(urls) != 1 || urls[0].(map[string]any)["kind"] != "pack" || urls[0].(map[string]any)["url"] != prefix+"/tree/main/skills" {
 		t.Fatal(pack)
 	}
 	writeSkill(t, filepath.Join(upstream, "skills", "extra"))
@@ -1436,10 +1438,19 @@ func TestInstallSingleSkillAndRejectsBadSkills(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(library, "anthropics", "engineering")); !os.IsNotExist(err) {
 		t.Fatal(err)
 	}
-	missing := prefix + "/tree/main/skills/engineering"
-	code, _, errOut = runCLIStreams(t, library, "install", missing)
-	if code != 2 || errOut != "目录没有 SKILL.md: "+missing+"\n" {
+	dirURL := prefix + "/tree/main/skills/engineering"
+	code, _, errOut = runCLIStreams(t, library, "install", dirURL)
+	if code != 0 || errOut != "" {
 		t.Fatalf("code %d err %q", code, errOut)
+	}
+	if _, err := os.Stat(filepath.Join(library, "anthropics-engineering", "tdd", "SKILL.md")); err != nil {
+		t.Fatal(err)
+	}
+	dirLock := readLockMap(t, library)
+	dirPack := dirLock["packs"].(map[string]any)["anthropics-engineering"].(map[string]any)
+	dirURLs, _ := dirPack["url"].([]any)
+	if dirPack["kind"] != "remote" || len(dirURLs) != 1 || dirURLs[0].(map[string]any)["kind"] != "pack" || dirURLs[0].(map[string]any)["url"] != dirURL {
+		t.Fatal(dirPack)
 	}
 
 	bad := filepath.Join(root, "bad")
@@ -1514,5 +1525,108 @@ func TestLocalInstallSkipsUpgradeAddress(t *testing.T) {
 	code, out, errOut := runCLIStreams(t, library, "upgrade", "demo")
 	if code != 0 || errOut != "" || out != "没有安装地址: demo:one\n" {
 		t.Fatalf("code %d out %q err %q", code, out, errOut)
+	}
+}
+
+func TestSkillsDirectoryKeepsDerivedPackageName(t *testing.T) {
+	root, _, library := withHome(t)
+	upstream := filepath.Join(root, "upstream")
+	writeSkill(t, filepath.Join(upstream, "skills", "baoyu-article-illustrator"))
+	writeSkill(t, filepath.Join(upstream, "skills", "baoyu-translate"))
+	initGitRepo(t, upstream)
+	prefix := "https://github.com/JimLiu/baoyu-skills"
+	pointGitHubAt(t, upstream, prefix)
+	raw := prefix + "/tree/main/skills"
+	if code, _, errOut := runCLIStreams(t, library, "install", raw); code != 0 {
+		t.Fatal(errOut)
+	}
+	if _, err := os.Stat(filepath.Join(library, "baoyu", "baoyu-article-illustrator", "SKILL.md")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(library, "baoyu-skills")); !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+	lock := readLockMap(t, library)
+	pack := lock["packs"].(map[string]any)["baoyu"].(map[string]any)
+	urls, _ := pack["url"].([]any)
+	if pack["kind"] != "remote" || len(urls) != 1 || urls[0].(map[string]any)["kind"] != "pack" || urls[0].(map[string]any)["url"] != raw {
+		t.Fatal(pack)
+	}
+}
+
+func TestDirectoryInstallAppendsURLAndUpgrade(t *testing.T) {
+	root, _, library := withHome(t)
+	upstream := filepath.Join(root, "upstream")
+	writeSkill(t, filepath.Join(upstream, "skills", "engineering", "alpha"))
+	writeSkill(t, filepath.Join(upstream, "skills", "engineering", "beta"))
+	writeSkill(t, filepath.Join(upstream, "skills", "productivity", "grill"))
+	writeSkill(t, filepath.Join(upstream, "skills", "other", "leaf"))
+	initGitRepo(t, upstream)
+	prefix := "https://github.com/mattpocock/skills"
+	pointGitHubAt(t, upstream, prefix)
+	eng := prefix + "/tree/main/skills/engineering"
+	if code, _, errOut := runCLIStreams(t, library, "install", eng); code != 0 {
+		t.Fatal(errOut)
+	}
+	prod := prefix + "/tree/main/skills/productivity"
+	if code, _, errOut := runCLIStreams(t, library, "install", "--package", "mattpocock-engineering", prod); code != 0 {
+		t.Fatal(errOut)
+	}
+	leaf := prefix + "/tree/main/skills/other/leaf"
+	if code, _, errOut := runCLIStreams(t, library, "install", "--package", "mattpocock-engineering", leaf); code != 0 {
+		t.Fatal(errOut)
+	}
+	lock := readLockMap(t, library)
+	pack := lock["packs"].(map[string]any)["mattpocock-engineering"].(map[string]any)
+	urls, _ := pack["url"].([]any)
+	if pack["kind"] != "remote" || len(urls) != 3 {
+		t.Fatal(pack)
+	}
+	if urls[0].(map[string]any)["url"] != eng || urls[0].(map[string]any)["kind"] != "pack" {
+		t.Fatal(urls)
+	}
+	if urls[1].(map[string]any)["url"] != prod || urls[1].(map[string]any)["kind"] != "pack" {
+		t.Fatal(urls)
+	}
+	if urls[2].(map[string]any)["url"] != leaf || urls[2].(map[string]any)["kind"] != "pick" {
+		t.Fatal(urls)
+	}
+	writeSkill(t, filepath.Join(upstream, "skills", "engineering", "extra"))
+	writeSkill(t, filepath.Join(upstream, "skills", "other", "sibling"))
+	git(t, upstream, "add", ".")
+	git(t, upstream, "commit", "-m", "more")
+	code, out, errOut := runCLIStreams(t, library, "upgrade", "mattpocock-engineering")
+	if code != 0 || errOut != "" || !bytes.Contains([]byte(out), []byte("已安装 mattpocock-engineering:extra")) {
+		t.Fatalf("code %d out %q err %q", code, out, errOut)
+	}
+	if _, err := os.Stat(filepath.Join(library, "mattpocock-engineering", "extra", "SKILL.md")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(library, "mattpocock-engineering", "sibling")); !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+}
+
+func TestGitInstallAdoptsRemote(t *testing.T) {
+	root, _, library := withHome(t)
+	source := filepath.Join(root, "sources", "demo")
+	writeSkill(t, filepath.Join(source, "local"))
+	if code, output := runCLI(t, library, "install", source); code != 0 {
+		t.Fatal(output)
+	}
+	upstream := filepath.Join(root, "upstream")
+	writeSkill(t, filepath.Join(upstream, "skills", "nano"))
+	initGitRepo(t, upstream)
+	prefix := "https://github.com/acme/widgets"
+	pointGitHubAt(t, upstream, prefix)
+	raw := prefix + "/tree/main/skills/nano"
+	if code, _, errOut := runCLIStreams(t, library, "install", "--package", "demo", raw); code != 0 {
+		t.Fatal(errOut)
+	}
+	lock := readLockMap(t, library)
+	pack := lock["packs"].(map[string]any)["demo"].(map[string]any)
+	urls, _ := pack["url"].([]any)
+	if pack["kind"] != "remote" || len(urls) != 1 || urls[0].(map[string]any)["kind"] != "pick" || urls[0].(map[string]any)["url"] != raw {
+		t.Fatal(pack)
 	}
 }

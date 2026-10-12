@@ -86,14 +86,15 @@ macOS / Linux：
 
 | 类型 | 磁盘结构 | 安装来源 |
 | --- | --- | --- |
-| 纯技能包（pack） | `skill-library/<包名>/<技能名>/SKILL.md` | 安装整个技能集合。集合里只有一个技能时也是 pack |
-| 单个技能（single） | `skill-library/<包名>/<技能名>/SKILL.md` | 安装时指定了技能集合里的某一个技能 |
-| 本机目录（locale） | 保持装进来的目录 | 从本机目录安装 |
-| 混合包（mixed） | 包根和子目录都有 `SKILL.md` | 两边都有 |
+| 远端（remote） | `skill-library/<包名>/<技能名>/SKILL.md` | 从 Git 地址安装 |
+| 本机（locale） | 保持装进来的目录 | 从本机目录安装 |
+| 混合包（mixed） | 包根和子目录都有 `SKILL.md` | 链出时整包一条链接。锁定仍按有没有安装地址记成 remote 或 locale |
 
 安装时跳过 `__pycache__`、`.venv`、`node_modules`、`.DS_Store` 和源里的 `.skill-lock.json`。以 `.` 开头的目录不计入技能，但其余文件仍会复制。Git 安装不把 `.git` 留在包里。
 
-`.skill-lock.json` 是磁盘索引，版本 2。每个包有 `kind`，以及 `skills`：技能文件夹名到安装地址和 Git 树哈希。树哈希与远端该路径的 tree SHA 相同。本地路径安装的技能没有地址，不写入。`install`（除非 `--unlock`）、`upgrade` 与 `lock` 会更新索引。`lock` 按磁盘重写，并给有安装地址的技能文件夹写上树哈希。`upgrade` 先取远端树哈希，相同则不下载文件；没有哈希或树哈希不同则下载并覆盖。pack 会把远端新出现的技能文件夹一并装入；single 只更新已经装上的那一个。`remove` 不更新索引。
+`.skill-lock.json` 是磁盘索引，版本 2。每个包的 `kind` 是 `remote` 或 `locale`。`locale` 没有 `url`。`remote` 的 `url` 是安装地址列表，每一项是完整地址，自己的 `kind` 为 `pack` 或 `pick`。`pack` 指向一个目录：该目录没有 `SKILL.md`，直接子目录里有。升级这个包时，补上该目录里新出现的技能文件夹。`pick` 指向一个技能文件夹，升级只更新它。同一个包可以同时有这两种地址。`skills` 是技能文件夹名到安装地址和 Git 树哈希。树哈希与远端该路径的 tree SHA 相同。没有安装地址的技能文件夹不写入。`install`（除非 `--unlock`）、`upgrade` 与 `lock` 会更新索引。`lock` 按磁盘重写，并给有安装地址的技能文件夹写上树哈希，已有的 `url` 列表保留。`upgrade` 按 `url` 里的仓库和分支克隆，同一仓库同一分支只克隆一次。先取远端树哈希，相同则不下载文件；没有哈希或树哈希不同则下载并覆盖。远端没有的技能文件夹留在库里。`remove` 不更新索引。
+
+省略 `--package` 时，点名一个技能文件夹，或地址就是 `skills` 目录时，仍用仓库名推导包名。地址指向 `skills` 下面的这种目录时，默认包名是推导名加 `-` 和该目录名。`--package` 把这次地址追加到指定包，不替换已有地址。
 
 ## 配置格式
 

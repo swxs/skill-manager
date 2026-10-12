@@ -163,21 +163,38 @@ func Fetch(raw string) (cleanup func(), drops []Drop, kind string, line string) 
 	}
 	if remote.Skill {
 		skillDir := filepath.Join(dir, filepath.FromSlash(remote.SkillRel))
-		if !lib.IsFile(filepath.Join(skillDir, "SKILL.md")) {
+		if lib.IsFile(filepath.Join(skillDir, "SKILL.md")) {
+			name := remote.SkillName()
+			if !lib.ValidName(name) {
+				cleanup()
+				return func() {}, nil, "name", fmt.Sprintf("无法从 URL 推导包名: %s", strings.TrimSpace(raw))
+			}
+			return cleanup, []Drop{{
+				Name: name,
+				Dir:  skillDir,
+				URL:  remote.Recorded(branch, name),
+				Hash: treeAt(dir, remote.SkillRel, skillDir),
+			}}, "", ""
+		}
+		children := directSkills(skillDir)
+		if len(children) == 0 {
 			cleanup()
 			return func() {}, nil, "noskill", fmt.Sprintf("目录没有 SKILL.md: %s", strings.TrimSpace(raw))
 		}
-		name := remote.SkillName()
-		if !lib.ValidName(name) {
-			cleanup()
-			return func() {}, nil, "name", fmt.Sprintf("无法从 URL 推导包名: %s", strings.TrimSpace(raw))
+		drops = make([]Drop, 0, len(children))
+		for _, name := range children {
+			child := remote
+			child.Skill = true
+			child.SkillRel = remote.SkillRel + "/" + name
+			childDir := filepath.Join(dir, filepath.FromSlash(child.SkillRel))
+			drops = append(drops, Drop{
+				Name: name,
+				Dir:  childDir,
+				URL:  child.Recorded(branch, name),
+				Hash: treeAt(dir, child.SkillRel, childDir),
+			})
 		}
-		return cleanup, []Drop{{
-			Name: name,
-			Dir:  skillDir,
-			URL:  remote.Recorded(branch, name),
-			Hash: treeAt(dir, remote.SkillRel, skillDir),
-		}}, "", ""
+		return cleanup, drops, "", ""
 	}
 	children, bad := skillChildren(dir)
 	if bad {
@@ -195,6 +212,28 @@ func Fetch(raw string) (cleanup func(), drops []Drop, kind string, line string) 
 		})
 	}
 	return cleanup, drops, "", ""
+}
+
+func directSkills(dir string) []string {
+	if !lib.IsDir(dir) {
+		return nil
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	var names []string
+	for _, entry := range entries {
+		if !entry.IsDir() || strings.HasPrefix(entry.Name(), ".") || !lib.ValidName(entry.Name()) {
+			continue
+		}
+		if !lib.IsFile(filepath.Join(dir, entry.Name(), "SKILL.md")) {
+			continue
+		}
+		names = append(names, entry.Name())
+	}
+	lib.SortFold(names)
+	return names
 }
 
 func skillChildren(root string) ([]string, bool) {
@@ -242,12 +281,13 @@ func populateWithGit(dir string, remote Remote, raw string) (string, string, str
 		return "", "fetch", fmt.Sprintf("无法取得技能: %s", strings.TrimSpace(raw))
 	}
 	AppendInstallLog("浅克隆完成")
-	sparse := "skills"
+	sparse := []string{"skills"}
 	if remote.Skill {
-		sparse = remote.SkillRel
+		sparse = []string{remote.SkillRel, remote.SkillRel + "/**"}
 	}
-	if text, err := Combined("-C", dir, "sparse-checkout", "set", "--no-cone", "--", sparse); err != nil {
-		AppendInstallLog("git sparse-checkout set --no-cone -- " + sparse + "\n" + text)
+	args = append([]string{"-C", dir, "sparse-checkout", "set", "--no-cone", "--"}, sparse...)
+	if text, err := Combined(args...); err != nil {
+		AppendInstallLog("git sparse-checkout set --no-cone -- " + strings.Join(sparse, " ") + "\n" + text)
 		return "", "fetch", fmt.Sprintf("无法取得技能: %s", strings.TrimSpace(raw))
 	}
 	branch := remote.Branch
@@ -258,6 +298,10 @@ func populateWithGit(dir string, remote Remote, raw string) (string, string, str
 			return "", "fetch", fmt.Sprintf("无法取得技能: %s", strings.TrimSpace(raw))
 		}
 	}
-	AppendInstallLog("已检出 " + sparse + " 分支 " + branch)
+	shown := "skills"
+	if remote.Skill {
+		shown = remote.SkillRel
+	}
+	AppendInstallLog("已检出 " + shown + " 分支 " + branch)
 	return branch, "", ""
 }

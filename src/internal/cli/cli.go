@@ -17,23 +17,23 @@ import (
 	"github.com/swxs/skill-manager/internal/symlink"
 )
 
-func writeInstallLock(library, packName string, urls, hashes map[string]string, kind string, unlock bool) int {
+func writeInstallLock(library, packName string, urls, hashes map[string]string, source gitpack.SourceURL, unlock bool) int {
 	if unlock {
 		return 0
 	}
 	overrides := map[string]map[string]string{}
 	hashOverrides := map[string]map[string]string{}
-	kinds := map[string]string{}
+	sources := map[string]gitpack.SourceURL{}
 	if packName != "" && len(urls) > 0 {
 		overrides[packName] = urls
 	}
 	if packName != "" && len(hashes) > 0 {
 		hashOverrides[packName] = hashes
 	}
-	if packName != "" && kind != "" {
-		kinds[packName] = kind
+	if packName != "" && source.URL != "" {
+		sources[packName] = source
 	}
-	if err := gitpack.WriteLock(library, overrides, hashOverrides, kinds, false); err != nil {
+	if err := gitpack.WriteLock(library, overrides, hashOverrides, sources, false); err != nil {
 		fmt.Println(err.Error())
 		return 1
 	}
@@ -134,7 +134,7 @@ func installLocal(library, src, ref string, unlock bool) int {
 	if existed && ref == "" {
 		fmt.Println("跳过复制")
 	}
-	return writeInstallLock(library, packName, nil, nil, "locale", unlock)
+	return writeInstallLock(library, packName, nil, nil, gitpack.SourceURL{}, unlock)
 }
 
 func installGit(library, raw, packName string, unlock bool) int {
@@ -143,20 +143,19 @@ func installGit(library, raw, packName string, unlock bool) int {
 		fmt.Fprintf(os.Stderr, "无法从 URL 推导包名: %s\n", strings.TrimSpace(raw))
 		return 2
 	}
-	if packName == "" {
-		packName, err = gitpack.PackageName(remote.Owner, remote.Repo)
+	explicit := packName != ""
+	base := packName
+	if !explicit {
+		base, err = gitpack.PackageName(remote.Owner, remote.Repo)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "无法从 URL 推导包名: %s\n", strings.TrimSpace(raw))
 			return 2
 		}
+		packName = base
 	}
 	if !lib.ValidName(packName) {
 		fmt.Fprintf(os.Stderr, "非法包名: %s\n", packName)
 		return 2
-	}
-	dest := filepath.Join(library, packName)
-	if code := refusePackLink(dest); code != 0 {
-		return code
 	}
 	cleanup, drops, kind, line := gitpack.Fetch(raw)
 	defer cleanup()
@@ -167,6 +166,17 @@ func installGit(library, raw, packName string, unlock bool) int {
 			return 1
 		}
 		return 2
+	}
+	if !explicit && skillDirectory(remote, drops) && remote.SkillRel != "skills" {
+		packName = base + "-" + remote.SkillName()
+		if !lib.ValidName(packName) {
+			fmt.Fprintf(os.Stderr, "非法包名: %s\n", packName)
+			return 2
+		}
+	}
+	dest := filepath.Join(library, packName)
+	if code := refusePackLink(dest); code != 0 {
+		return code
 	}
 	for _, drop := range drops {
 		skillDir := filepath.Join(dest, drop.Name)
@@ -208,12 +218,9 @@ func installGit(library, raw, packName string, unlock bool) int {
 			hashes[drop.Name] = drop.Hash
 		}
 	}
-	kind = "pack"
-	if remote.Skill && gitpack.SelectsSkill(remote.SkillRel) {
-		kind = "single"
-	}
+	source := sourceOf(remote, drops)
 	if many {
-		if code := writeInstallLock(library, packName, urls, hashes, kind, unlock); code != 0 {
+		if code := writeInstallLock(library, packName, urls, hashes, source, unlock); code != 0 {
 			return code
 		}
 		return printInstalled(dest, packName, "已安装", false)
@@ -221,7 +228,36 @@ func installGit(library, raw, packName string, unlock bool) int {
 	if code := printInstalled(dest, packName, "已安装", true); code != 0 {
 		return code
 	}
-	return writeInstallLock(library, packName, urls, hashes, kind, unlock)
+	return writeInstallLock(library, packName, urls, hashes, source, unlock)
+}
+
+func skillDirectory(remote gitpack.Remote, drops []gitpack.Drop) bool {
+	if !remote.Skill || len(drops) == 0 {
+		return false
+	}
+	parsed, err := gitpack.ParseRemote(drops[0].URL)
+	if err != nil {
+		return false
+	}
+	return parsed.SkillRel != remote.SkillRel
+}
+
+func sourceOf(remote gitpack.Remote, drops []gitpack.Drop) gitpack.SourceURL {
+	branch := remote.Branch
+	if len(drops) > 0 {
+		if parsed, err := gitpack.ParseRemote(drops[0].URL); err == nil && parsed.Branch != "" {
+			branch = parsed.Branch
+		}
+	}
+	rel := remote.SkillRel
+	kind := "pick"
+	if !remote.Skill {
+		rel = "skills"
+		kind = "pack"
+	} else if skillDirectory(remote, drops) {
+		kind = "pack"
+	}
+	return gitpack.SourceURL{URL: remote.At(branch, rel), Kind: kind}
 }
 
 func swapTree(src, dest string) error {
@@ -929,115 +965,120 @@ func upgradePack(library, spec string) int {
 		failed    bool
 	}
 	outcomes := make([]upgradeOutcome, len(targets))
-	var urls []string
 	for i, name := range targets {
 		url := gitpack.SkillURL(library, packName, name)
 		outcomes[i] = upgradeOutcome{label: packName + ":" + name, url: url, missing: url == ""}
-		if url != "" {
-			urls = append(urls, url)
-		}
 	}
-	probed := gitpack.ProbeTrees(urls)
-	var printMu sync.Mutex
-	var wg sync.WaitGroup
-	for i, name := range targets {
+	for i := range outcomes {
 		if outcomes[i].missing {
 			fmt.Printf("没有安装地址: %s\n", outcomes[i].label)
-			continue
 		}
-		old := gitpack.SkillHash(library, packName, name)
-		if old != "" && probed[outcomes[i].url] != "" && probed[outcomes[i].url] == old {
-			outcomes[i].unchanged = true
-			fmt.Printf("未变化 %s\n", outcomes[i].label)
-			continue
-		}
-		wg.Add(1)
-		go func(i int, name string) {
-			defer wg.Done()
-			hash, err := refreshSkill(dest, name, outcomes[i].url)
-			printMu.Lock()
-			defer printMu.Unlock()
-			if err != nil {
-				outcomes[i].failed = true
-				fmt.Fprintf(os.Stderr, "无法取得技能: %s\n", outcomes[i].url)
-				return
-			}
-			outcomes[i].hash = hash
-			if outcomes[i].label != spec {
-				fmt.Printf("已升级 %s\n", outcomes[i].label)
-			}
-		}(i, name)
 	}
-	wg.Wait()
+	grouped := map[string][]gitpack.SkillWant{}
+	var refOrder []gitpack.CloneRef
+	for i, name := range targets {
+		if outcomes[i].missing {
+			continue
+		}
+		remote, err := gitpack.ParseRemote(outcomes[i].url)
+		if err != nil || remote.SkillRel == "" {
+			outcomes[i].failed = true
+			fmt.Fprintf(os.Stderr, "无法取得技能: %s\n", outcomes[i].url)
+			continue
+		}
+		ref, ok := gitpack.RefOf(outcomes[i].url)
+		if !ok {
+			outcomes[i].failed = true
+			fmt.Fprintf(os.Stderr, "无法取得技能: %s\n", outcomes[i].url)
+			continue
+		}
+		key := ref.Clone + "\n" + ref.Branch
+		if _, seen := grouped[key]; !seen {
+			refOrder = append(refOrder, ref)
+		}
+		grouped[key] = append(grouped[key], gitpack.SkillWant{
+			Name:    name,
+			Rel:     remote.SkillRel,
+			URL:     outcomes[i].url,
+			OldHash: gitpack.SkillHash(library, packName, name),
+		})
+	}
+	discover := map[string][]string{}
+	if !one {
+		for _, source := range gitpack.PackSources(library, packName) {
+			if source.Kind != "pack" {
+				continue
+			}
+			remote, err := gitpack.ParseRemote(source.URL)
+			if err != nil {
+				continue
+			}
+			ref, ok := gitpack.RefOf(source.URL)
+			if !ok {
+				continue
+			}
+			key := ref.Clone + "\n" + ref.Branch
+			if _, seen := grouped[key]; !seen {
+				grouped[key] = nil
+				refOrder = append(refOrder, ref)
+			}
+			discover[key] = append(discover[key], remote.SkillRel)
+		}
+	}
+	var printMu sync.Mutex
+	var wg sync.WaitGroup
 	failed := false
 	updated := 0
 	freshHashes := map[string]string{}
-	for i, outcome := range outcomes {
-		if outcome.missing || outcome.unchanged {
-			continue
-		}
-		if outcome.failed {
-			failed = true
-			continue
-		}
-		updated++
-		if outcome.hash != "" {
-			freshHashes[targets[i]] = outcome.hash
-		}
-	}
 	newURLs := map[string]string{}
-	if !one && gitpack.EffectiveKind(library, packName) == "pack" {
-		have := map[string]bool{}
-		for _, name := range info.Skills {
-			have[name] = true
-		}
-		sample := ""
-		for _, outcome := range outcomes {
-			if outcome.url != "" {
-				sample = outcome.url
-				break
-			}
-		}
-		var extraWG sync.WaitGroup
-		type extraSkill struct {
-			name, url, hash string
-			err             error
-		}
-		var extras []extraSkill
-		for _, item := range gitpack.NewSkills(sample, have) {
-			extras = append(extras, extraSkill{name: item.Name, url: item.URL})
-		}
-		extraWG.Add(len(extras))
-		for i := range extras {
-			go func(i int) {
-				defer extraWG.Done()
-				hash, err := refreshSkill(dest, extras[i].name, extras[i].url)
-				printMu.Lock()
-				defer printMu.Unlock()
-				if err != nil {
-					extras[i].err = err
-					fmt.Fprintf(os.Stderr, "无法取得技能: %s\n", extras[i].url)
-					return
+	var tallyMu sync.Mutex
+	for _, ref := range refOrder {
+		wg.Add(1)
+		go func(ref gitpack.CloneRef) {
+			defer wg.Done()
+			key := ref.Clone + "\n" + ref.Branch
+			cleanup, unchanged, brought, err := gitpack.Bring(ref, grouped[key], discover[key])
+			defer cleanup()
+			printMu.Lock()
+			defer printMu.Unlock()
+			if err != nil {
+				for _, want := range grouped[key] {
+					fmt.Fprintf(os.Stderr, "无法取得技能: %s\n", want.URL)
 				}
-				extras[i].hash = hash
-				fmt.Printf("已安装 %s:%s\n", packName, extras[i].name)
-			}(i)
-		}
-		extraWG.Wait()
-		for _, item := range extras {
-			if item.err != nil {
+				tallyMu.Lock()
 				failed = true
-				continue
+				tallyMu.Unlock()
+				return
 			}
-			updated++
-			newURLs[item.name] = item.url
-			if item.hash != "" {
-				freshHashes[item.name] = item.hash
+			for _, name := range unchanged {
+				fmt.Printf("未变化 %s:%s\n", packName, name)
 			}
-		}
+			tallyMu.Lock()
+			defer tallyMu.Unlock()
+			for _, item := range brought {
+				if err := swapTree(item.Dir, filepath.Join(dest, item.Name)); err != nil {
+					fmt.Fprintf(os.Stderr, "无法取得技能: %s\n", item.URL)
+					failed = true
+					continue
+				}
+				updated++
+				if item.Hash != "" {
+					freshHashes[item.Name] = item.Hash
+				}
+				if item.Fresh {
+					newURLs[item.Name] = item.URL
+					fmt.Printf("已安装 %s:%s\n", packName, item.Name)
+					continue
+				}
+				if packName+":"+item.Name != spec {
+					fmt.Printf("已升级 %s:%s\n", packName, item.Name)
+				}
+			}
+		}(ref)
 	}
+	wg.Wait()
 	if updated > 0 {
-		if code := writeInstallLock(library, packName, newURLs, freshHashes, "", false); code != 0 {
+		if code := writeInstallLock(library, packName, newURLs, freshHashes, gitpack.SourceURL{}, false); code != 0 {
 			return code
 		}
 	}

@@ -73,6 +73,8 @@ macOS / Linux：
 2. 技能库里已经有这个包：不再问，`install <该地址> --package <包名>`。
 3. 还没有这个包：问一次是否用这个默认名新建。同意则 `install <该地址>`。拒绝则让用户另给包名，再 `install <该地址> --package <用户给的名字>`。只问这一次。
 
+`package-name` 给出仓库推导名。地址就是 `skills` 目录，或不写 `--package` 点名一个技能文件夹时，`install` 使用这个推导名。地址指向 `skills` 下面、自己没有 `SKILL.md`、直接子目录有的目录时，不写 `--package` 的 `install` 使用 `<推导名>-<目录名>`。写了 `--package` 就用这个名字，并把这次地址追加到该包已有的地址后面。把 `install` 实际打印的包名告诉用户。
+
 本机目录的 `install` 不跑 `package-name`，也不询问默认包名。
 
 `install` 退出码是 0 时，把标准输出告诉用户，再对这次装进的每个技能文件夹代跑 `add` 再 `sync`。声明写成 `包名:技能名`。全局工作区用 `add --global` 和 `sync --global`。
