@@ -898,6 +898,105 @@ func TestStatusUsesDeclarationAndPackSkill(t *testing.T) {
 	}
 }
 
+func TestStatusAndSyncAtUserHomeUseGlobalOnce(t *testing.T) {
+	root, home, library := withHome(t)
+	userHome := filepath.Dir(home)
+	source := filepath.Join(root, "sources", "demo")
+	writeSkill(t, filepath.Join(source, "one"))
+	if code, output := runCLI(t, library, "install", source); code != 0 {
+		t.Fatal(output)
+	}
+	if code, output := runCLI(t, library, "add", "--global", "demo"); code != 0 {
+		t.Fatal(output)
+	}
+	if code, output := runCLI(t, library, "sync", "--global"); code != 0 {
+		t.Fatal(output)
+	}
+	link := filepath.Join(home, "skills", "one")
+	if symlink.Target(link) == "" {
+		t.Fatal("global link missing")
+	}
+	code, output := runCLI(t, library, "status", "--root", userHome)
+	if code != 0 {
+		t.Fatal(code, output)
+	}
+	if bytes.Count([]byte(output), []byte("全局技能声明:")) != 1 || bytes.Contains([]byte(output), []byte("工作区技能声明:")) || bytes.Contains([]byte(output), []byte("\n工作区:")) {
+		t.Fatal(output)
+	}
+	code, output = runCLI(t, library, "sync", "--root", userHome)
+	if code != 0 || !bytes.Contains([]byte(output), []byte("global 配置:")) || bytes.Contains([]byte(output), []byte("移除")) {
+		t.Fatal(code, output)
+	}
+	if symlink.Target(link) == "" {
+		t.Fatal("global link removed")
+	}
+}
+
+func TestSyncWithoutSkillsJSONLeavesGlobal(t *testing.T) {
+	root, home, library := withHome(t)
+	source := filepath.Join(root, "sources", "demo")
+	writeSkill(t, filepath.Join(source, "one"))
+	if code, output := runCLI(t, library, "install", source); code != 0 {
+		t.Fatal(output)
+	}
+	if code, output := runCLI(t, library, "add", "--global", "demo"); code != 0 {
+		t.Fatal(output)
+	}
+	if code, output := runCLI(t, library, "sync", "--global"); code != 0 {
+		t.Fatal(output)
+	}
+	repo := filepath.Join(root, "repo")
+	if err := os.Mkdir(repo, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	code, output := runCLI(t, library, "sync", "--root", repo)
+	if code != 2 || !bytes.Contains([]byte(output), []byte("未找到 .agents/skills.json")) {
+		t.Fatal(code, output)
+	}
+	if symlink.Target(filepath.Join(home, "skills", "one")) == "" {
+		t.Fatal("global link removed")
+	}
+}
+
+func TestSyncRemovesWorkspaceLinkCoveredByGlobal(t *testing.T) {
+	root, home, library := withHome(t)
+	source := filepath.Join(root, "sources", "demo")
+	writeSkill(t, filepath.Join(source, "one"))
+	if code, output := runCLI(t, library, "install", source); code != 0 {
+		t.Fatal(output)
+	}
+	if code, output := runCLI(t, library, "add", "--global", "demo"); code != 0 {
+		t.Fatal(output)
+	}
+	if code, output := runCLI(t, library, "sync", "--global"); code != 0 {
+		t.Fatal(output)
+	}
+	repo := filepath.Join(root, "repo")
+	if err := os.Mkdir(repo, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if code, output := runCLI(t, library, "add", "--root", repo, "demo"); code != 0 {
+		t.Fatal(output)
+	}
+	workspaceLink := filepath.Join(repo, ".agents", "skills", "one")
+	if err := os.MkdirAll(filepath.Dir(workspaceLink), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := symlink.Create(workspaceLink, filepath.Join(library, "demo", "one")); err != nil {
+		t.Fatal(err)
+	}
+	code, output := runCLI(t, library, "sync", "--root", repo)
+	if code != 0 || !bytes.Contains([]byte(output), []byte("移除")) || !bytes.Contains([]byte(output), []byte("global 已覆盖")) {
+		t.Fatal(code, output)
+	}
+	if symlink.Target(workspaceLink) != "" {
+		t.Fatal("workspace link kept")
+	}
+	if symlink.Target(filepath.Join(home, "skills", "one")) == "" {
+		t.Fatal("global link removed")
+	}
+}
+
 func initGitRepo(t *testing.T, dir string) {
 	t.Helper()
 	git(t, dir, "init", "-q")

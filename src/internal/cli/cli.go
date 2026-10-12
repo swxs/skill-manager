@@ -531,6 +531,9 @@ func cmdStatus(library string, roots []string) int {
 		code = next
 	}
 	for _, root := range roots {
+		if isUserHome(root) {
+			continue
+		}
 		fmt.Println()
 		resolved := lib.Resolve(root)
 		config := filepath.Join(resolved, ".agents", lib.ConfigName)
@@ -564,9 +567,31 @@ func cmdStatus(library string, roots []string) int {
 	return code
 }
 
+func isUserHome(root string) bool {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return false
+	}
+	return lib.SamePath(root, home)
+}
+
 func cmdSync(library string, roots []string) int {
 	code := 0
+	syncedGlobal := false
 	for index, root := range roots {
+		if isUserHome(root) {
+			if syncedGlobal {
+				continue
+			}
+			syncedGlobal = true
+			if index > 0 {
+				fmt.Println()
+			}
+			if next := cmdSyncGlobal(library); next > code {
+				code = next
+			}
+			continue
+		}
 		if index > 0 {
 			fmt.Println()
 		}
@@ -1375,7 +1400,7 @@ var commandHelp = map[string]string{
   skill-manager lock`,
 	"status": `查看全局工作区, 工作区技能状态
 
-按这个顺序查看：全局技能声明，全局工作区，工作区技能声明，工作区。
+按这个顺序查看：全局技能声明，全局工作区，工作区技能声明，工作区。根目录是用户主目录时，后两节不重复打印。
 
 用法:
   skill-manager status [--root <工作区>]...
@@ -1408,7 +1433,7 @@ var commandHelp = map[string]string{
   从全局工作区的技能声明中移除。与 --root 同时出现时以全局工作区为准。`,
 	"sync": `按技能声明同步技能
 
-按指定工作区的技能声明，把技能库中的技能链到该工作区。技能声明不存在则失败，不建链接。
+按指定工作区的技能声明，把技能库中的技能链到该工作区。技能声明不存在则失败，不建链接。根目录是用户主目录时，按全局工作区同步。
 
 用法:
   skill-manager sync [--root <工作区>]... [--global]
