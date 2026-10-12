@@ -1,6 +1,8 @@
 package library
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"io/fs"
@@ -301,6 +303,55 @@ func copyFile(src, dest string) error {
 
 func RemoveTree(path string) error {
 	return os.RemoveAll(path)
+}
+
+// ContentHash 是技能文件夹里会被安装复制的文件的内容哈希。路径用 /，顺序固定。
+func ContentHash(root string) (string, error) {
+	var files []string
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if path != root && installIgnore[d.Name()] {
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if d.IsDir() {
+			return nil
+		}
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		files = append(files, filepath.ToSlash(rel))
+		return nil
+	})
+	if err != nil {
+		return "", err
+	}
+	sort.Strings(files)
+	sum := sha256.New()
+	for _, rel := range files {
+		if _, err := sum.Write([]byte(rel)); err != nil {
+			return "", err
+		}
+		if _, err := sum.Write([]byte{0}); err != nil {
+			return "", err
+		}
+		body, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(rel)))
+		if err != nil {
+			return "", err
+		}
+		if _, err := sum.Write(body); err != nil {
+			return "", err
+		}
+		if _, err := sum.Write([]byte{0}); err != nil {
+			return "", err
+		}
+	}
+	return hex.EncodeToString(sum.Sum(nil)), nil
 }
 
 func SamePath(left, right string) bool {

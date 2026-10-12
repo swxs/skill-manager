@@ -175,9 +175,38 @@ func CheckoutRef(pack, ref string) error {
 	return nil
 }
 
+const lockVersion = 2
+
+type skillLock struct {
+	URL  string `json:"url"`
+	Hash string `json:"hash"`
+}
+
+func (s *skillLock) UnmarshalJSON(data []byte) error {
+	if len(data) > 0 && data[0] == '"' {
+		var url string
+		if err := json.Unmarshal(data, &url); err != nil {
+			return err
+		}
+		s.URL = url
+		s.Hash = ""
+		return nil
+	}
+	var raw struct {
+		URL  string `json:"url"`
+		Hash string `json:"hash"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	s.URL = raw.URL
+	s.Hash = raw.Hash
+	return nil
+}
+
 type lockEntry struct {
-	Kind   string            `json:"kind"`
-	Skills map[string]string `json:"skills"`
+	Kind   string               `json:"kind"`
+	Skills map[string]skillLock `json:"skills"`
 }
 
 func (e *lockEntry) UnmarshalJSON(data []byte) error {
@@ -189,7 +218,7 @@ func (e *lockEntry) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	e.Kind = raw.Kind
-	e.Skills = map[string]string{}
+	e.Skills = map[string]skillLock{}
 	if len(raw.Skills) == 0 || string(raw.Skills) == "null" {
 		return nil
 	}
@@ -212,13 +241,12 @@ func readLock(library string) lockFile {
 	path := LockPath(library)
 	raw, err := lib.ReadText(path)
 	if err != nil {
-		return lockFile{Version: 1, Packs: map[string]lockEntry{}}
+		return lockFile{Version: lockVersion, Packs: map[string]lockEntry{}}
 	}
 	var data lockFile
 	if err := json.Unmarshal([]byte(raw), &data); err != nil || data.Packs == nil {
-		return lockFile{Version: 1, Packs: map[string]lockEntry{}}
+		return lockFile{Version: lockVersion, Packs: map[string]lockEntry{}}
 	}
-	data.Version = 1
 	return data
 }
 
@@ -263,30 +291,39 @@ func WriteLock(library string, overrides map[string]map[string]string) error {
 		if err != nil {
 			return err
 		}
-		old := map[string]string{}
+		old := map[string]skillLock{}
 		if prev, ok := previous.Packs[name]; ok && prev.Skills != nil {
 			old = prev.Skills
 		}
 		fresh := overrides[name]
-		skills := map[string]string{}
+		skills := map[string]skillLock{}
 		for _, skill := range info.Skills {
 			url := ""
 			if fresh != nil {
 				if u, ok := fresh[skill]; ok {
 					url = u
-				} else {
-					url = old[skill]
+				} else if prev, ok := old[skill]; ok {
+					url = prev.URL
 				}
-			} else {
-				url = old[skill]
+			} else if prev, ok := old[skill]; ok {
+				url = prev.URL
 			}
-			if url != "" {
-				skills[skill] = url
+			if url == "" {
+				continue
 			}
+			dir := info.Members[skill]
+			if dir == "" {
+				dir = filepath.Join(pack, skill)
+			}
+			hash, err := lib.ContentHash(dir)
+			if err != nil {
+				return err
+			}
+			skills[skill] = skillLock{URL: url, Hash: hash}
 		}
 		packs[name] = lockEntry{Kind: info.Kind, Skills: skills}
 	}
-	payload, err := json.MarshalIndent(lockFile{Version: 1, Packs: packs}, "", "  ")
+	payload, err := json.MarshalIndent(lockFile{Version: lockVersion, Packs: packs}, "", "  ")
 	if err != nil {
 		return err
 	}
@@ -299,7 +336,16 @@ func SkillURL(library, pack, skill string) string {
 	if !ok || entry.Skills == nil {
 		return ""
 	}
-	return entry.Skills[skill]
+	return entry.Skills[skill].URL
+}
+
+func SkillHash(library, pack, skill string) string {
+	data := readLock(library)
+	entry, ok := data.Packs[pack]
+	if !ok || entry.Skills == nil {
+		return ""
+	}
+	return entry.Skills[skill].Hash
 }
 
 func OriginDefaultBranch(gitRoot string) string {

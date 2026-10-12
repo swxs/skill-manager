@@ -2,6 +2,7 @@ package cli
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -866,7 +867,12 @@ func upgradePack(library, spec string) int {
 			fmt.Printf("没有安装地址: %s\n", label)
 			continue
 		}
-		if err := refreshSkill(dest, name, url); err != nil {
+		err := refreshSkill(library, dest, packName, name, url)
+		if errors.Is(err, errSameHash) {
+			fmt.Printf("未变化 %s\n", label)
+			continue
+		}
+		if err != nil {
 			fmt.Fprintf(os.Stderr, "无法取得技能: %s\n", url)
 			failed = true
 			continue
@@ -895,11 +901,20 @@ func splitUpgrade(spec string) (string, string, bool) {
 	return pack, skill, true
 }
 
-func refreshSkill(pack, name, raw string) error {
+var errSameHash = errors.New("same hash")
+
+func refreshSkill(library, pack, packName, name, raw string) error {
 	cleanup, drops, kind, _ := gitpack.Fetch(raw)
 	defer cleanup()
 	if kind != "" || len(drops) != 1 {
 		return fmt.Errorf("fetch")
+	}
+	hash, err := lib.ContentHash(drops[0].Dir)
+	if err != nil {
+		return err
+	}
+	if old := gitpack.SkillHash(library, packName, name); old != "" && old == hash {
+		return errSameHash
 	}
 	return swapTree(drops[0].Dir, filepath.Join(pack, name))
 }
@@ -1387,14 +1402,14 @@ var commandHelp = map[string]string{
   skill-manager package-name <Git地址>`,
 	"upgrade": `更新技能库中的技能
 
-按锁定里的安装地址重装。没有地址的跳过。不读包里的 .git。
+按锁定里的安装地址重取。取到的技能文件夹哈希与锁定相同则不覆盖。没有哈希则覆盖。没有地址的跳过。不读包里的 .git。
 
 用法:
   skill-manager upgrade <包名>
   skill-manager upgrade <包名:技能名>`,
 	"lock": `锁定技能库信息
 
-按磁盘写下技能库索引。
+按磁盘写下技能库索引。有安装地址的技能文件夹写上内容哈希。
 
 用法:
   skill-manager lock`,

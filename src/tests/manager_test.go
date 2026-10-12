@@ -17,6 +17,26 @@ import (
 	"github.com/swxs/skill-manager/internal/symlink"
 )
 
+func lockSkillURL(t *testing.T, skills map[string]any, name string) string {
+	t.Helper()
+	rec, ok := skills[name].(map[string]any)
+	if !ok {
+		t.Fatalf("%s %#v", name, skills[name])
+	}
+	url, _ := rec["url"].(string)
+	return url
+}
+
+func lockSkillHash(t *testing.T, skills map[string]any, name string) string {
+	t.Helper()
+	rec, ok := skills[name].(map[string]any)
+	if !ok {
+		t.Fatalf("%s %#v", name, skills[name])
+	}
+	hash, _ := rec["hash"].(string)
+	return hash
+}
+
 func writeSkill(t *testing.T, dir string) {
 	t.Helper()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -1040,6 +1060,87 @@ func TestPackageNameRules(t *testing.T) {
 	}
 }
 
+func TestLockRewritesOldLockWithHash(t *testing.T) {
+	root, _, library := withHome(t)
+	upstream := filepath.Join(root, "upstream")
+	writeSkill(t, filepath.Join(upstream, "skills", "alpha"))
+	initGitRepo(t, upstream)
+	prefix := "https://github.com/acme/widgets"
+	pointGitHubAt(t, upstream, prefix)
+	if code, _, errOut := runCLIStreams(t, library, "install", prefix); code != 0 {
+		t.Fatal(errOut)
+	}
+	url := prefix + "/tree/main/skills/alpha"
+	old := "{\n  \"version\": 1,\n  \"packs\": {\n    \"widgets\": {\n      \"kind\": \"pack\",\n      \"skills\": {\n        \"alpha\": \"" + url + "\"\n      }\n    }\n  }\n}\n"
+	if err := os.WriteFile(filepath.Join(library, ".skill-lock.json"), []byte(old), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	code, out, errOut := runCLIStreams(t, library, "lock")
+	if code != 0 || errOut != "" {
+		t.Fatalf("code %d out %q err %q", code, out, errOut)
+	}
+	raw, err := os.ReadFile(filepath.Join(library, ".skill-lock.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var lock map[string]any
+	if err := json.Unmarshal(raw, &lock); err != nil {
+		t.Fatal(err)
+	}
+	if lock["version"].(float64) != 2 {
+		t.Fatal(string(raw))
+	}
+	skills := lock["packs"].(map[string]any)["widgets"].(map[string]any)["skills"].(map[string]any)
+	if lockSkillURL(t, skills, "alpha") != url || lockSkillHash(t, skills, "alpha") == "" {
+		t.Fatal(skills)
+	}
+}
+
+func TestUpgradeWithoutHashReplaces(t *testing.T) {
+	root, _, library := withHome(t)
+	upstream := filepath.Join(root, "upstream")
+	writeSkill(t, filepath.Join(upstream, "skills", "alpha"))
+	initGitRepo(t, upstream)
+	prefix := "https://github.com/acme/widgets"
+	pointGitHubAt(t, upstream, prefix)
+	if code, _, errOut := runCLIStreams(t, library, "install", prefix); code != 0 {
+		t.Fatal(errOut)
+	}
+	raw, err := os.ReadFile(filepath.Join(library, ".skill-lock.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var lock map[string]any
+	if err := json.Unmarshal(raw, &lock); err != nil {
+		t.Fatal(err)
+	}
+	skills := lock["packs"].(map[string]any)["widgets"].(map[string]any)["skills"].(map[string]any)
+	rec := skills["alpha"].(map[string]any)
+	rec["hash"] = ""
+	rewritten, err := json.MarshalIndent(lock, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(library, ".skill-lock.json"), append(rewritten, '\n'), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	code, out, errOut := runCLIStreams(t, library, "upgrade", "widgets:alpha")
+	if code != 0 || errOut != "" || !bytes.Contains([]byte(out), []byte("已升级 widgets:alpha")) {
+		t.Fatalf("code %d out %q err %q", code, out, errOut)
+	}
+	raw, err = os.ReadFile(filepath.Join(library, ".skill-lock.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(raw, &lock); err != nil {
+		t.Fatal(err)
+	}
+	skills = lock["packs"].(map[string]any)["widgets"].(map[string]any)["skills"].(map[string]any)
+	if lockSkillHash(t, skills, "alpha") == "" {
+		t.Fatal(skills)
+	}
+}
+
 func TestInstallGitLabTreeAndUpgrade(t *testing.T) {
 	root, _, library := withHome(t)
 	upstream := filepath.Join(root, "upstream")
@@ -1070,7 +1171,10 @@ func TestInstallGitLabTreeAndUpgrade(t *testing.T) {
 	pack := lock["packs"].(map[string]any)["xm-agent"].(map[string]any)
 	skills := pack["skills"].(map[string]any)
 	want := prefix + "/-/tree/main/skills/alpha"
-	if skills["alpha"] != want || skills["beta"] != prefix+"/-/tree/main/skills/beta" {
+	if lockSkillURL(t, skills, "alpha") != want || lockSkillURL(t, skills, "beta") != prefix+"/-/tree/main/skills/beta" {
+		t.Fatal(skills)
+	}
+	if lockSkillHash(t, skills, "alpha") == "" {
 		t.Fatal(skills)
 	}
 	if err := os.WriteFile(filepath.Join(upstream, "skills", "alpha", "SKILL.md"), []byte("---\nname: alpha\n---\nnext\n"), 0o644); err != nil {
@@ -1117,7 +1221,7 @@ func TestInstallOtherHostTreePath(t *testing.T) {
 	}
 	pack := lock["packs"].(map[string]any)["widgets"].(map[string]any)
 	skills := pack["skills"].(map[string]any)
-	if skills["alpha"] != raw {
+	if lockSkillURL(t, skills, "alpha") != raw || lockSkillHash(t, skills, "alpha") == "" {
 		t.Fatal(skills)
 	}
 }
@@ -1165,8 +1269,15 @@ func TestInstallGitSkillsAndUpgrade(t *testing.T) {
 	pack := lock["packs"].(map[string]any)["diagram-design"].(map[string]any)
 	skills := pack["skills"].(map[string]any)
 	want := prefix + "/tree/main/skills/alpha"
-	if skills["alpha"] != want || skills["beta"] != prefix+"/tree/main/skills/beta" {
+	if lockSkillURL(t, skills, "alpha") != want || lockSkillURL(t, skills, "beta") != prefix+"/tree/main/skills/beta" {
 		t.Fatal(skills)
+	}
+	if lock["version"].(float64) != 2 || lockSkillHash(t, skills, "alpha") == "" {
+		t.Fatal(lock)
+	}
+	code, out, errOut = runCLIStreams(t, library, "upgrade", "diagram-design:alpha")
+	if code != 0 || errOut != "" || !bytes.Contains([]byte(out), []byte("未变化 diagram-design:alpha")) || bytes.Contains([]byte(out), []byte("已升级")) {
+		t.Fatalf("unchanged code %d out %q err %q", code, out, errOut)
 	}
 	if err := os.WriteFile(filepath.Join(upstream, "skills", "alpha", "SKILL.md"), []byte("---\nname: alpha\n---\nnext\n"), 0o644); err != nil {
 		t.Fatal(err)
