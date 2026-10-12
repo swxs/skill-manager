@@ -2,6 +2,7 @@ package gitpack
 
 import (
 	"os"
+	"strings"
 	"sync"
 
 	lib "github.com/swxs/skill-manager/internal/library"
@@ -94,4 +95,67 @@ func probeGroup(remote Remote, raws []string) map[string]string {
 		}
 	}
 	return out
+}
+
+// NewSkills 列出与 sample 同一父目录、调用方还没有的技能文件夹。
+func NewSkills(sample string, have map[string]bool) []struct{ Name, URL string } {
+	remote, err := ParseRemote(sample)
+	if err != nil || remote.SkillRel == "" || !gitAvailable() {
+		return nil
+	}
+	parent := ""
+	if i := strings.LastIndex(remote.SkillRel, "/"); i >= 0 {
+		parent = remote.SkillRel[:i]
+	}
+	dir, err := os.MkdirTemp("", "skill-manager-hash-")
+	if err != nil {
+		return nil
+	}
+	defer os.RemoveAll(dir)
+	args := []string{
+		"-c", "core.autocrlf=false",
+		"-c", "advice.detachedHead=false",
+		"clone", "--depth", "1", "--filter=blob:none", "--single-branch",
+	}
+	if remote.Branch != "" {
+		args = append(args, "--branch", remote.Branch)
+	}
+	args = append(args, remote.Clone, dir)
+	if _, err := Combined(args...); err != nil {
+		return nil
+	}
+	spec := "HEAD"
+	if parent != "" {
+		spec = "HEAD:" + parent
+	}
+	var found []struct{ Name, URL string }
+	for _, name := range strings.Split(Command(dir, "ls-tree", "--name-only", spec), "\n") {
+		name = strings.TrimSpace(name)
+		if name == "" || strings.Contains(name, "/") || have[name] || !lib.ValidName(name) {
+			continue
+		}
+		rel := name
+		if parent != "" {
+			rel = parent + "/" + name
+		}
+		ok := false
+		for _, line := range strings.Split(Command(dir, "ls-tree", "--name-only", "HEAD:"+rel), "\n") {
+			if strings.TrimSpace(line) == "SKILL.md" {
+				ok = true
+				break
+			}
+		}
+		if !ok {
+			continue
+		}
+		next := remote
+		next.Skill = true
+		next.SkillRel = rel
+		branch := remote.Branch
+		if branch == "" {
+			branch = "HEAD"
+		}
+		found = append(found, struct{ Name, URL string }{Name: name, URL: next.Recorded(branch, name)})
+	}
+	return found
 }

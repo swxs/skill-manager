@@ -480,7 +480,7 @@ func TestInitGroupsGlobalLinksIntoPackEntry(t *testing.T) {
 	_, home, library := withHome(t)
 	writeSkill(t, filepath.Join(library, "demo", "one"))
 	writeSkill(t, filepath.Join(library, "demo", "two"))
-	if err := gitpack.WriteLock(library, nil, nil, true); err != nil {
+	if err := gitpack.WriteLock(library, nil, nil, nil, true); err != nil {
 		t.Fatal(err)
 	}
 	skillsHome := filepath.Join(home, "skills")
@@ -824,15 +824,13 @@ func TestLockAlignsKindAndListsEachSkill(t *testing.T) {
 	if code != 0 {
 		t.Fatal(output)
 	}
-	cols := map[string]int{}
+	cols := []int{}
 	for _, line := range bytes.Split([]byte(output), []byte("\n")) {
-		for _, kind := range []string{"single", "pack"} {
-			if bytes.Contains(line, []byte("  "+kind)) {
-				cols[kind] = bytes.Index(line, []byte(kind))
-			}
+		if at := bytes.Index(line, []byte("locale")); at >= 0 {
+			cols = append(cols, at)
 		}
 	}
-	if _, ok := cols["single"]; !ok || cols["single"] != cols["pack"] {
+	if len(cols) != 2 || cols[0] != cols[1] {
 		t.Fatal(output)
 	}
 	for _, skill := range []string{"    ab", "    one", "    two"} {
@@ -862,7 +860,7 @@ func TestListAlignsKindColumn(t *testing.T) {
 		if len(line) == 0 {
 			continue
 		}
-		at := bytes.Index(line, []byte("pack"))
+		at := bytes.Index(line, []byte("locale"))
 		if at < 0 {
 			t.Fatal(output)
 		}
@@ -1078,6 +1076,108 @@ func TestTreeHashMatchesGit(t *testing.T) {
 	if got != strings.TrimSpace(string(out)) {
 		t.Fatalf("disk %s git %s", got, out)
 	}
+}
+
+func TestOneSkillNamedLikePackIsPack(t *testing.T) {
+	_, _, library := withHome(t)
+	writeSkill(t, filepath.Join(library, "archify", "archify"))
+	info, err := lib.Inspect(filepath.Join(library, "archify"))
+	if err != nil || info.Kind != "pack" || len(info.Skills) != 1 {
+		t.Fatalf("%+v %v", info, err)
+	}
+}
+
+func TestLocalInstallIsLocale(t *testing.T) {
+	root, _, library := withHome(t)
+	source := filepath.Join(root, "sources", "aliyun-sls")
+	writeSkill(t, filepath.Join(source, "prelog"))
+	if code, output := runCLI(t, library, "install", source); code != 0 {
+		t.Fatal(output)
+	}
+	raw, err := os.ReadFile(filepath.Join(library, ".skill-lock.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var lock map[string]any
+	if err := json.Unmarshal(raw, &lock); err != nil {
+		t.Fatal(err)
+	}
+	pack := lock["packs"].(map[string]any)["aliyun-sls"].(map[string]any)
+	if pack["kind"] != "locale" {
+		t.Fatal(pack)
+	}
+}
+
+func TestSpecifiedSkillIsSingleAndSkipsNew(t *testing.T) {
+	root, _, library := withHome(t)
+	upstream := filepath.Join(root, "upstream")
+	writeSkill(t, filepath.Join(upstream, "skills", "nano-pdf"))
+	writeSkill(t, filepath.Join(upstream, "skills", "other"))
+	initGitRepo(t, upstream)
+	prefix := "https://github.com/openclaw/openclaw"
+	pointGitHubAt(t, upstream, prefix)
+	raw := prefix + "/tree/main/skills/nano-pdf"
+	if code, _, errOut := runCLIStreams(t, library, "install", raw); code != 0 {
+		t.Fatal(errOut)
+	}
+	lock := readLockMap(t, library)
+	pack := lock["packs"].(map[string]any)["openclaw"].(map[string]any)
+	if pack["kind"] != "single" {
+		t.Fatal(pack)
+	}
+	writeSkill(t, filepath.Join(upstream, "skills", "gamma"))
+	git(t, upstream, "add", ".")
+	git(t, upstream, "commit", "-m", "gamma")
+	code, out, errOut := runCLIStreams(t, library, "upgrade", "openclaw")
+	if code != 0 || errOut != "" {
+		t.Fatalf("code %d out %q err %q", code, out, errOut)
+	}
+	if _, err := os.Stat(filepath.Join(library, "openclaw", "gamma")); !os.IsNotExist(err) {
+		t.Fatal("single upgrade installed a new skill", err)
+	}
+	if bytes.Contains([]byte(out), []byte("已安装 openclaw:gamma")) {
+		t.Fatal(out)
+	}
+}
+
+func TestPackUpgradeInstallsNewSkill(t *testing.T) {
+	root, _, library := withHome(t)
+	upstream := filepath.Join(root, "upstream")
+	writeSkill(t, filepath.Join(upstream, "skills", "archify"))
+	initGitRepo(t, upstream)
+	prefix := "https://github.com/tt-a1i/archify"
+	pointGitHubAt(t, upstream, prefix)
+	if code, _, errOut := runCLIStreams(t, library, "install", prefix); code != 0 {
+		t.Fatal(errOut)
+	}
+	lock := readLockMap(t, library)
+	pack := lock["packs"].(map[string]any)["archify"].(map[string]any)
+	if pack["kind"] != "pack" {
+		t.Fatal(pack)
+	}
+	writeSkill(t, filepath.Join(upstream, "skills", "extra"))
+	git(t, upstream, "add", ".")
+	git(t, upstream, "commit", "-m", "extra")
+	code, out, errOut := runCLIStreams(t, library, "upgrade", "archify")
+	if code != 0 || errOut != "" || !bytes.Contains([]byte(out), []byte("已安装 archify:extra")) || !bytes.Contains([]byte(out), []byte("已升级 archify")) {
+		t.Fatalf("code %d out %q err %q", code, out, errOut)
+	}
+	if _, err := os.Stat(filepath.Join(library, "archify", "extra", "SKILL.md")); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func readLockMap(t *testing.T, library string) map[string]any {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join(library, ".skill-lock.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var lock map[string]any
+	if err := json.Unmarshal(raw, &lock); err != nil {
+		t.Fatal(err)
+	}
+	return lock
 }
 
 func TestLockRewritesOldLockWithHash(t *testing.T) {

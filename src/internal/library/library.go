@@ -193,11 +193,7 @@ func Inspect(pack string) (Pack, error) {
 	if err != nil {
 		return Pack{}, err
 	}
-	kind := "pack"
-	if len(members) == 1 && members[filepath.Base(pack)] != "" {
-		kind = "single"
-	}
-	return Pack{Kind: kind, Skills: names, Members: members}, nil
+	return Pack{Kind: "pack", Skills: names, Members: members}, nil
 }
 
 func mixedSkillNames(pack string, files []string) []string {

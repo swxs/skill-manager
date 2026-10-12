@@ -17,19 +17,23 @@ import (
 	"github.com/swxs/skill-manager/internal/symlink"
 )
 
-func writeInstallLock(library, packName string, urls, hashes map[string]string, unlock bool) int {
+func writeInstallLock(library, packName string, urls, hashes map[string]string, kind string, unlock bool) int {
 	if unlock {
 		return 0
 	}
 	overrides := map[string]map[string]string{}
 	hashOverrides := map[string]map[string]string{}
+	kinds := map[string]string{}
 	if packName != "" && len(urls) > 0 {
 		overrides[packName] = urls
 	}
 	if packName != "" && len(hashes) > 0 {
 		hashOverrides[packName] = hashes
 	}
-	if err := gitpack.WriteLock(library, overrides, hashOverrides, false); err != nil {
+	if packName != "" && kind != "" {
+		kinds[packName] = kind
+	}
+	if err := gitpack.WriteLock(library, overrides, hashOverrides, kinds, false); err != nil {
 		fmt.Println(err.Error())
 		return 1
 	}
@@ -130,7 +134,7 @@ func installLocal(library, src, ref string, unlock bool) int {
 	if existed && ref == "" {
 		fmt.Println("跳过复制")
 	}
-	return writeInstallLock(library, packName, nil, nil, unlock)
+	return writeInstallLock(library, packName, nil, nil, "locale", unlock)
 }
 
 func installGit(library, raw, packName string, unlock bool) int {
@@ -204,8 +208,12 @@ func installGit(library, raw, packName string, unlock bool) int {
 			hashes[drop.Name] = drop.Hash
 		}
 	}
+	kind = "pack"
+	if remote.Skill && gitpack.SelectsSkill(remote.SkillRel) {
+		kind = "single"
+	}
 	if many {
-		if code := writeInstallLock(library, packName, urls, hashes, unlock); code != 0 {
+		if code := writeInstallLock(library, packName, urls, hashes, kind, unlock); code != 0 {
 			return code
 		}
 		return printInstalled(dest, packName, "已安装", false)
@@ -213,7 +221,7 @@ func installGit(library, raw, packName string, unlock bool) int {
 	if code := printInstalled(dest, packName, "已安装", true); code != 0 {
 		return code
 	}
-	return writeInstallLock(library, packName, urls, hashes, unlock)
+	return writeInstallLock(library, packName, urls, hashes, kind, unlock)
 }
 
 func swapTree(src, dest string) error {
@@ -426,7 +434,7 @@ func printLibrary(library string) {
 		if err != nil {
 			item.err = err.Error()
 		} else {
-			item.kind = info.Kind
+			item.kind = shownKind(library, name, info)
 			item.skills = info.Skills
 		}
 		rows = append(rows, item)
@@ -447,6 +455,13 @@ func printLibrary(library string) {
 			fmt.Printf("    %s\n", skill)
 		}
 	}
+}
+
+func shownKind(library, name string, info lib.Pack) string {
+	if kind := gitpack.EffectiveKind(library, name); kind != "" {
+		return kind
+	}
+	return info.Kind
 }
 
 func displayWidth(s string) int {
@@ -493,7 +508,7 @@ func cmdList(library, packName string) int {
 		nameW, kindW, countW := 0, 0, 0
 		for _, name := range packs {
 			info, _ := lib.Inspect(filepath.Join(library, name))
-			item := row{name: name, kind: info.Kind, count: strconv.Itoa(len(info.Skills))}
+			item := row{name: name, kind: shownKind(library, name, info), count: strconv.Itoa(len(info.Skills))}
 			rows = append(rows, item)
 			nameW = max(nameW, displayWidth(item.name))
 			kindW = max(kindW, displayWidth(item.kind))
@@ -514,7 +529,7 @@ func cmdList(library, packName string) int {
 		return 1
 	}
 	info, _ := lib.Inspect(pack)
-	fmt.Printf("%s  %s\n", packName, info.Kind)
+	fmt.Printf("%s  %s\n", packName, shownKind(library, packName, info))
 	if len(info.Skills) == 0 {
 		fmt.Println("  （无技能）")
 		return 0
@@ -865,7 +880,7 @@ func cmdLock(library string) int {
 		fmt.Printf("skill 库不存在: %s\n", library)
 		return 2
 	}
-	if err := gitpack.WriteLock(library, nil, nil, true); err != nil {
+	if err := gitpack.WriteLock(library, nil, nil, nil, true); err != nil {
 		fmt.Println(err.Error())
 		return 1
 	}
@@ -970,8 +985,59 @@ func upgradePack(library, spec string) int {
 			freshHashes[targets[i]] = outcome.hash
 		}
 	}
+	newURLs := map[string]string{}
+	if !one && gitpack.EffectiveKind(library, packName) == "pack" {
+		have := map[string]bool{}
+		for _, name := range info.Skills {
+			have[name] = true
+		}
+		sample := ""
+		for _, outcome := range outcomes {
+			if outcome.url != "" {
+				sample = outcome.url
+				break
+			}
+		}
+		var extraWG sync.WaitGroup
+		type extraSkill struct {
+			name, url, hash string
+			err             error
+		}
+		var extras []extraSkill
+		for _, item := range gitpack.NewSkills(sample, have) {
+			extras = append(extras, extraSkill{name: item.Name, url: item.URL})
+		}
+		extraWG.Add(len(extras))
+		for i := range extras {
+			go func(i int) {
+				defer extraWG.Done()
+				hash, err := refreshSkill(dest, extras[i].name, extras[i].url)
+				printMu.Lock()
+				defer printMu.Unlock()
+				if err != nil {
+					extras[i].err = err
+					fmt.Fprintf(os.Stderr, "无法取得技能: %s\n", extras[i].url)
+					return
+				}
+				extras[i].hash = hash
+				fmt.Printf("已安装 %s:%s\n", packName, extras[i].name)
+			}(i)
+		}
+		extraWG.Wait()
+		for _, item := range extras {
+			if item.err != nil {
+				failed = true
+				continue
+			}
+			updated++
+			newURLs[item.name] = item.url
+			if item.hash != "" {
+				freshHashes[item.name] = item.hash
+			}
+		}
+	}
 	if updated > 0 {
-		if code := writeInstallLock(library, packName, nil, freshHashes, false); code != 0 {
+		if code := writeInstallLock(library, packName, newURLs, freshHashes, "", false); code != 0 {
 			return code
 		}
 	}
@@ -1156,7 +1222,7 @@ func cmdInit(library string) int {
 	for _, entry := range entries {
 		fmt.Printf("  + %s\n", entry)
 	}
-	if err := gitpack.WriteLock(library, nil, nil, false); err != nil {
+	if err := gitpack.WriteLock(library, nil, nil, nil, false); err != nil {
 		fmt.Println(err.Error())
 		return 1
 	}

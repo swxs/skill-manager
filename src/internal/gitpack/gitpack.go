@@ -275,7 +275,7 @@ func PackDirs(library string) ([]string, error) {
 
 // WriteLock 按磁盘重写锁定。overrides 是这次要写下的 包名 → 技能名 → 安装地址。
 // 没出现在 overrides 里的技能沿用上次的地址。没有地址的不写入。不读包里的 .git。
-func WriteLock(library string, overrides map[string]map[string]string, hashes map[string]map[string]string, recompute bool) error {
+func WriteLock(library string, overrides map[string]map[string]string, hashes map[string]map[string]string, kinds map[string]string, recompute bool) error {
 	if err := os.MkdirAll(library, 0o755); err != nil {
 		return err
 	}
@@ -335,13 +335,72 @@ func WriteLock(library string, overrides map[string]map[string]string, hashes ma
 			}
 			skills[skill] = skillLock{URL: url, Hash: hash}
 		}
-		packs[name] = lockEntry{Kind: info.Kind, Skills: skills}
+		kind := ""
+		if kinds != nil {
+			kind = kinds[name]
+		}
+		if kind == "" && previous.Version >= lockVersion {
+			if prev, ok := previous.Packs[name]; ok {
+				kind = prev.Kind
+			}
+		}
+		if kind == "" {
+			kind = deriveKind(name, skills, info.Kind)
+		}
+		packs[name] = lockEntry{Kind: kind, Skills: skills}
 	}
 	payload, err := json.MarshalIndent(lockFile{Version: lockVersion, Packs: packs}, "", "  ")
 	if err != nil {
 		return err
 	}
 	return lib.WriteLF(LockPath(library), string(payload)+"\n")
+}
+
+// SelectsSkill 表示这条地址是在技能集合里指定了某一个技能。
+func SelectsSkill(rel string) bool {
+	return rel == "skills" || strings.HasPrefix(rel, "skills/") || strings.Contains(rel, "/skills/")
+}
+
+func deriveKind(packName string, skills map[string]skillLock, structural string) string {
+	n := 0
+	onlyName := ""
+	onlyURL := ""
+	for name, skill := range skills {
+		if skill.URL == "" {
+			continue
+		}
+		n++
+		onlyName = name
+		onlyURL = skill.URL
+	}
+	if n == 0 {
+		return "locale"
+	}
+	if structural == "mixed" {
+		return "mixed"
+	}
+	if n == 1 && onlyName != packName {
+		remote, err := ParseRemote(onlyURL)
+		if err == nil && SelectsSkill(remote.SkillRel) {
+			return "single"
+		}
+	}
+	return "pack"
+}
+
+// EffectiveKind 在锁定尚未写成新版本时按安装地址推导，否则用记下的类型。
+func EffectiveKind(library, packName string) string {
+	data := readLock(library)
+	entry, ok := data.Packs[packName]
+	info, _ := lib.Inspect(filepath.Join(library, packName))
+	if ok && data.Version >= lockVersion && entry.Kind != "" {
+		return entry.Kind
+	}
+	skills := map[string]skillLock{}
+	if ok {
+		skills = entry.Skills
+	}
+	return deriveKind(packName, skills, info.Kind)
 }
 
 func SkillURL(library, pack, skill string) string {
