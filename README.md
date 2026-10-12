@@ -92,7 +92,7 @@ macOS / Linux：
 
 安装时跳过 `__pycache__`、`.venv`、`node_modules`、`.DS_Store` 和源里的 `.skill-lock.json`。以 `.` 开头的目录不计入技能，但其余文件仍会复制。Git 安装不把 `.git` 留在包里。
 
-`.skill-lock.json` 是磁盘索引，版本 2。每个包有 `kind`，以及 `skills`：技能文件夹名到安装地址和内容哈希。本地路径安装的技能没有地址，不写入。`install`（除非 `--unlock`）、`upgrade` 与 `lock` 会更新索引。`lock` 按磁盘重写，并给有安装地址的技能文件夹写上内容哈希。`upgrade` 取到的文件夹哈希与锁定相同则不覆盖；没有哈希则覆盖。`remove` 不更新索引。
+`.skill-lock.json` 是磁盘索引，版本 2。每个包有 `kind`，以及 `skills`：技能文件夹名到安装地址和 Git 树哈希。树哈希与远端该路径的 tree SHA 相同。本地路径安装的技能没有地址，不写入。`install`（除非 `--unlock`）、`upgrade` 与 `lock` 会更新索引。`lock` 按磁盘重写，并给有安装地址的技能文件夹写上树哈希。`upgrade` 先取远端树哈希，相同则不下载文件；没有哈希或树哈希不同则下载并覆盖。`remove` 不更新索引。
 
 ## 配置格式
 

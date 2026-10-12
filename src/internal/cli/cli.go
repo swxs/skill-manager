@@ -2,12 +2,12 @@ package cli
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"unicode"
 
 	"github.com/swxs/skill-manager/internal/gitpack"
@@ -17,15 +17,19 @@ import (
 	"github.com/swxs/skill-manager/internal/symlink"
 )
 
-func writeInstallLock(library, packName string, urls map[string]string, unlock bool) int {
+func writeInstallLock(library, packName string, urls, hashes map[string]string, unlock bool) int {
 	if unlock {
 		return 0
 	}
 	overrides := map[string]map[string]string{}
+	hashOverrides := map[string]map[string]string{}
 	if packName != "" && len(urls) > 0 {
 		overrides[packName] = urls
 	}
-	if err := gitpack.WriteLock(library, overrides); err != nil {
+	if packName != "" && len(hashes) > 0 {
+		hashOverrides[packName] = hashes
+	}
+	if err := gitpack.WriteLock(library, overrides, hashOverrides, false); err != nil {
 		fmt.Println(err.Error())
 		return 1
 	}
@@ -33,15 +37,17 @@ func writeInstallLock(library, packName string, urls map[string]string, unlock b
 	return 0
 }
 
-func printInstalled(dest, packName, headline string) int {
+func printInstalled(dest, packName, headline string, list bool) int {
 	info, err := lib.Inspect(dest)
 	if err != nil {
 		fmt.Println(err.Error())
 		return 1
 	}
 	fmt.Printf("%s %s (%s)\n", headline, packName, info.Kind)
-	for _, skill := range info.Skills {
-		fmt.Printf("  - %s\n", skill)
+	if list {
+		for _, skill := range info.Skills {
+			fmt.Printf("  - %s\n", skill)
+		}
 	}
 	return 0
 }
@@ -118,13 +124,13 @@ func installLocal(library, src, ref string, unlock bool) int {
 	} else if existed {
 		headline = "已检出"
 	}
-	if code := printInstalled(dest, packName, headline); code != 0 {
+	if code := printInstalled(dest, packName, headline, true); code != 0 {
 		return code
 	}
 	if existed && ref == "" {
 		fmt.Println("跳过复制")
 	}
-	return writeInstallLock(library, packName, nil, unlock)
+	return writeInstallLock(library, packName, nil, nil, unlock)
 }
 
 func installGit(library, raw, packName string, unlock bool) int {
@@ -177,33 +183,37 @@ func installGit(library, raw, packName string, unlock bool) int {
 			return 1
 		}
 	}
-	var added []string
-	for _, drop := range drops {
-		skillDir := filepath.Join(dest, drop.Name)
-		existed := lib.IsDir(skillDir)
-		if err := swapTree(drop.Dir, skillDir); err != nil {
-			for _, name := range added {
-				_ = lib.RemoveTree(filepath.Join(dest, name))
-			}
-			if created {
-				_ = lib.RemoveTree(dest)
-			}
-			gitpack.AppendInstallLog("换入技能文件夹失败: " + err.Error())
-			fmt.Fprintf(os.Stderr, "无法取得技能: %s\n", strings.TrimSpace(raw))
-			return 1
+	many := len(drops) > 1
+	added, swapErr := swapDrops(dest, packName, drops, many)
+	if swapErr != nil {
+		for _, name := range added {
+			_ = lib.RemoveTree(filepath.Join(dest, name))
 		}
-		if !existed {
-			added = append(added, drop.Name)
+		if created {
+			_ = lib.RemoveTree(dest)
 		}
-	}
-	if code := printInstalled(dest, packName, "已安装"); code != 0 {
-		return code
+		gitpack.AppendInstallLog("换入技能文件夹失败: " + swapErr.Error())
+		fmt.Fprintf(os.Stderr, "无法取得技能: %s\n", strings.TrimSpace(raw))
+		return 1
 	}
 	urls := map[string]string{}
+	hashes := map[string]string{}
 	for _, drop := range drops {
 		urls[drop.Name] = drop.URL
+		if drop.Hash != "" {
+			hashes[drop.Name] = drop.Hash
+		}
 	}
-	return writeInstallLock(library, packName, urls, unlock)
+	if many {
+		if code := writeInstallLock(library, packName, urls, hashes, unlock); code != 0 {
+			return code
+		}
+		return printInstalled(dest, packName, "已安装", false)
+	}
+	if code := printInstalled(dest, packName, "已安装", true); code != 0 {
+		return code
+	}
+	return writeInstallLock(library, packName, urls, hashes, unlock)
 }
 
 func swapTree(src, dest string) error {
@@ -233,6 +243,43 @@ func swapTree(src, dest string) error {
 		_ = lib.RemoveTree(backup)
 	}
 	return nil
+}
+
+type placedSkill struct {
+	name    string
+	existed bool
+	err     error
+}
+
+func swapDrops(dest, packName string, drops []gitpack.Drop, progress bool) (added []string, err error) {
+	placed := make([]placedSkill, len(drops))
+	var printMu sync.Mutex
+	var wg sync.WaitGroup
+	for i, drop := range drops {
+		wg.Add(1)
+		go func(i int, drop gitpack.Drop) {
+			defer wg.Done()
+			skillDir := filepath.Join(dest, drop.Name)
+			existed := lib.IsDir(skillDir)
+			swapErr := swapTree(drop.Dir, skillDir)
+			placed[i] = placedSkill{name: drop.Name, existed: existed, err: swapErr}
+			if swapErr == nil && progress {
+				printMu.Lock()
+				fmt.Printf("已安装 %s:%s\n", packName, drop.Name)
+				printMu.Unlock()
+			}
+		}(i, drop)
+	}
+	wg.Wait()
+	for _, item := range placed {
+		if item.err != nil && err == nil {
+			err = item.err
+		}
+		if item.err == nil && !item.existed {
+			added = append(added, item.name)
+		}
+	}
+	return added, err
 }
 
 func installSpec(library, spec, packName string, unlock bool) (code int) {
@@ -818,7 +865,7 @@ func cmdLock(library string) int {
 		fmt.Printf("skill 库不存在: %s\n", library)
 		return 2
 	}
-	if err := gitpack.WriteLock(library, nil); err != nil {
+	if err := gitpack.WriteLock(library, nil, nil, true); err != nil {
 		fmt.Println(err.Error())
 		return 1
 	}
@@ -858,29 +905,73 @@ func upgradePack(library, spec string) int {
 		}
 		targets = []string{skillName}
 	}
+	type upgradeOutcome struct {
+		label     string
+		url       string
+		hash      string
+		missing   bool
+		unchanged bool
+		failed    bool
+	}
+	outcomes := make([]upgradeOutcome, len(targets))
+	var urls []string
+	for i, name := range targets {
+		url := gitpack.SkillURL(library, packName, name)
+		outcomes[i] = upgradeOutcome{label: packName + ":" + name, url: url, missing: url == ""}
+		if url != "" {
+			urls = append(urls, url)
+		}
+	}
+	probed := gitpack.ProbeTrees(urls)
+	var printMu sync.Mutex
+	var wg sync.WaitGroup
+	for i, name := range targets {
+		if outcomes[i].missing {
+			fmt.Printf("没有安装地址: %s\n", outcomes[i].label)
+			continue
+		}
+		old := gitpack.SkillHash(library, packName, name)
+		if old != "" && probed[outcomes[i].url] != "" && probed[outcomes[i].url] == old {
+			outcomes[i].unchanged = true
+			fmt.Printf("未变化 %s\n", outcomes[i].label)
+			continue
+		}
+		wg.Add(1)
+		go func(i int, name string) {
+			defer wg.Done()
+			hash, err := refreshSkill(dest, name, outcomes[i].url)
+			printMu.Lock()
+			defer printMu.Unlock()
+			if err != nil {
+				outcomes[i].failed = true
+				fmt.Fprintf(os.Stderr, "无法取得技能: %s\n", outcomes[i].url)
+				return
+			}
+			outcomes[i].hash = hash
+			if outcomes[i].label != spec {
+				fmt.Printf("已升级 %s\n", outcomes[i].label)
+			}
+		}(i, name)
+	}
+	wg.Wait()
 	failed := false
 	updated := 0
-	for _, name := range targets {
-		url := gitpack.SkillURL(library, packName, name)
-		label := packName + ":" + name
-		if url == "" {
-			fmt.Printf("没有安装地址: %s\n", label)
+	freshHashes := map[string]string{}
+	for i, outcome := range outcomes {
+		if outcome.missing || outcome.unchanged {
 			continue
 		}
-		err := refreshSkill(library, dest, packName, name, url)
-		if errors.Is(err, errSameHash) {
-			fmt.Printf("未变化 %s\n", label)
-			continue
-		}
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "无法取得技能: %s\n", url)
+		if outcome.failed {
 			failed = true
 			continue
 		}
 		updated++
+		if outcome.hash != "" {
+			freshHashes[targets[i]] = outcome.hash
+		}
 	}
 	if updated > 0 {
-		if code := writeInstallLock(library, packName, nil, false); code != 0 {
+		if code := writeInstallLock(library, packName, nil, freshHashes, false); code != 0 {
 			return code
 		}
 	}
@@ -901,22 +992,16 @@ func splitUpgrade(spec string) (string, string, bool) {
 	return pack, skill, true
 }
 
-var errSameHash = errors.New("same hash")
-
-func refreshSkill(library, pack, packName, name, raw string) error {
+func refreshSkill(pack, name, raw string) (string, error) {
 	cleanup, drops, kind, _ := gitpack.Fetch(raw)
 	defer cleanup()
 	if kind != "" || len(drops) != 1 {
-		return fmt.Errorf("fetch")
+		return "", fmt.Errorf("fetch")
 	}
-	hash, err := lib.ContentHash(drops[0].Dir)
-	if err != nil {
-		return err
+	if err := swapTree(drops[0].Dir, filepath.Join(pack, name)); err != nil {
+		return "", err
 	}
-	if old := gitpack.SkillHash(library, packName, name); old != "" && old == hash {
-		return errSameHash
-	}
-	return swapTree(drops[0].Dir, filepath.Join(pack, name))
+	return drops[0].Hash, nil
 }
 
 func initSelectionEntries(library, skillsFolder string) ([]string, []string, error) {
@@ -1071,7 +1156,7 @@ func cmdInit(library string) int {
 	for _, entry := range entries {
 		fmt.Printf("  + %s\n", entry)
 	}
-	if err := gitpack.WriteLock(library, nil); err != nil {
+	if err := gitpack.WriteLock(library, nil, nil, false); err != nil {
 		fmt.Println(err.Error())
 		return 1
 	}
@@ -1402,14 +1487,14 @@ var commandHelp = map[string]string{
   skill-manager package-name <Git地址>`,
 	"upgrade": `更新技能库中的技能
 
-按锁定里的安装地址重取。取到的技能文件夹哈希与锁定相同则不覆盖。没有哈希则覆盖。没有地址的跳过。不读包里的 .git。
+按锁定里的安装地址比较 Git 树哈希。相同则不下载文件。没有哈希或树哈希不同则下载并覆盖。没有地址的跳过。不读包里的 .git。
 
 用法:
   skill-manager upgrade <包名>
   skill-manager upgrade <包名:技能名>`,
 	"lock": `锁定技能库信息
 
-按磁盘写下技能库索引。有安装地址的技能文件夹写上内容哈希。
+按磁盘写下技能库索引。有安装地址的技能文件夹写上 Git 树哈希。
 
 用法:
   skill-manager lock`,

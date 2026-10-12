@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/swxs/skill-manager/internal/cli"
@@ -479,7 +480,7 @@ func TestInitGroupsGlobalLinksIntoPackEntry(t *testing.T) {
 	_, home, library := withHome(t)
 	writeSkill(t, filepath.Join(library, "demo", "one"))
 	writeSkill(t, filepath.Join(library, "demo", "two"))
-	if err := gitpack.WriteLock(library, nil); err != nil {
+	if err := gitpack.WriteLock(library, nil, nil, true); err != nil {
 		t.Fatal(err)
 	}
 	skillsHome := filepath.Join(home, "skills")
@@ -1057,6 +1058,25 @@ func TestPackageNameRules(t *testing.T) {
 	code, out, errOut := runCLIStreams(t, library, "package-name", "https://example.com/foo")
 	if code != 2 || out != "" || errOut != "无法从 URL 推导包名: https://example.com/foo\n" {
 		t.Fatalf("code %d out %q err %q", code, out, errOut)
+	}
+}
+
+func TestTreeHashMatchesGit(t *testing.T) {
+	root, _, _ := withHome(t)
+	upstream := filepath.Join(root, "upstream")
+	writeSkill(t, filepath.Join(upstream, "skills", "alpha"))
+	initGitRepo(t, upstream)
+	got, err := lib.TreeHash(filepath.Join(upstream, "skills", "alpha"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("git", "-C", upstream, "rev-parse", "HEAD:skills/alpha")
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != strings.TrimSpace(string(out)) {
+		t.Fatalf("disk %s git %s", got, out)
 	}
 }
 

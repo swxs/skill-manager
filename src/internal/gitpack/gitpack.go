@@ -275,7 +275,7 @@ func PackDirs(library string) ([]string, error) {
 
 // WriteLock 按磁盘重写锁定。overrides 是这次要写下的 包名 → 技能名 → 安装地址。
 // 没出现在 overrides 里的技能沿用上次的地址。没有地址的不写入。不读包里的 .git。
-func WriteLock(library string, overrides map[string]map[string]string) error {
+func WriteLock(library string, overrides map[string]map[string]string, hashes map[string]map[string]string, recompute bool) error {
 	if err := os.MkdirAll(library, 0o755); err != nil {
 		return err
 	}
@@ -311,13 +311,27 @@ func WriteLock(library string, overrides map[string]map[string]string) error {
 			if url == "" {
 				continue
 			}
-			dir := info.Members[skill]
-			if dir == "" {
-				dir = filepath.Join(pack, skill)
+			hash := ""
+			if !recompute {
+				if packHashes := hashes[name]; packHashes != nil {
+					hash = packHashes[skill]
+				}
+				if hash == "" {
+					if prev, ok := old[skill]; ok {
+						hash = prev.Hash
+					}
+				}
 			}
-			hash, err := lib.ContentHash(dir)
-			if err != nil {
-				return err
+			if hash == "" {
+				dir := info.Members[skill]
+				if dir == "" {
+					dir = filepath.Join(pack, skill)
+				}
+				var err error
+				hash, err = lib.TreeHash(dir)
+				if err != nil {
+					return err
+				}
 			}
 			skills[skill] = skillLock{URL: url, Hash: hash}
 		}

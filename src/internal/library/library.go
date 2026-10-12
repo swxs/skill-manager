@@ -1,7 +1,7 @@
 package library
 
 import (
-	"crypto/sha256"
+	"crypto/sha1"
 	"encoding/hex"
 	"fmt"
 	"io"
@@ -305,53 +305,93 @@ func RemoveTree(path string) error {
 	return os.RemoveAll(path)
 }
 
-// ContentHash 是技能文件夹里会被安装复制的文件的内容哈希。路径用 /，顺序固定。
-func ContentHash(root string) (string, error) {
-	var files []string
-	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if path != root && installIgnore[d.Name()] {
-			if d.IsDir() {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if d.IsDir() {
-			return nil
-		}
-		rel, err := filepath.Rel(root, path)
-		if err != nil {
-			return err
-		}
-		files = append(files, filepath.ToSlash(rel))
-		return nil
-	})
+// TreeHash 是技能文件夹的 Git 树哈希，与远端该路径的 tree SHA 相同。
+func TreeHash(root string) (string, error) {
+	sum, err := gitTree(root)
 	if err != nil {
 		return "", err
 	}
-	sort.Strings(files)
-	sum := sha256.New()
-	for _, rel := range files {
-		if _, err := sum.Write([]byte(rel)); err != nil {
-			return "", err
-		}
-		if _, err := sum.Write([]byte{0}); err != nil {
-			return "", err
-		}
-		body, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(rel)))
-		if err != nil {
-			return "", err
-		}
-		if _, err := sum.Write(body); err != nil {
-			return "", err
-		}
-		if _, err := sum.Write([]byte{0}); err != nil {
-			return "", err
-		}
+	return hex.EncodeToString(sum), nil
+}
+
+type gitEntry struct {
+	name string
+	mode string
+	sha  []byte
+}
+
+func gitTree(dir string) ([]byte, error) {
+	items, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
 	}
-	return hex.EncodeToString(sum.Sum(nil)), nil
+	var entries []gitEntry
+	for _, item := range items {
+		if installIgnore[item.Name()] {
+			continue
+		}
+		path := filepath.Join(dir, item.Name())
+		mode := item.Type()
+		if mode&os.ModeSymlink != 0 {
+			target, err := os.Readlink(path)
+			if err != nil {
+				return nil, err
+			}
+			entries = append(entries, gitEntry{name: item.Name(), mode: "120000", sha: gitBlob([]byte(target))})
+			continue
+		}
+		if item.IsDir() {
+			sha, err := gitTree(path)
+			if err != nil {
+				return nil, err
+			}
+			entries = append(entries, gitEntry{name: item.Name(), mode: "40000", sha: sha})
+			continue
+		}
+		body, err := os.ReadFile(path)
+		if err != nil {
+			return nil, err
+		}
+		fileMode := "100644"
+		info, err := item.Info()
+		if err != nil {
+			return nil, err
+		}
+		if info.Mode()&0o111 != 0 {
+			fileMode = "100755"
+		}
+		entries = append(entries, gitEntry{name: item.Name(), mode: fileMode, sha: gitBlob(body)})
+	}
+	sort.Slice(entries, func(i, j int) bool {
+		return gitName(entries[i]) < gitName(entries[j])
+	})
+	var body []byte
+	for _, entry := range entries {
+		body = append(body, entry.mode...)
+		body = append(body, ' ')
+		body = append(body, entry.name...)
+		body = append(body, 0)
+		body = append(body, entry.sha...)
+	}
+	return gitObject("tree", body), nil
+}
+
+func gitName(entry gitEntry) string {
+	if entry.mode == "40000" {
+		return entry.name + "/"
+	}
+	return entry.name
+}
+
+func gitBlob(body []byte) []byte {
+	return gitObject("blob", body)
+}
+
+func gitObject(kind string, body []byte) []byte {
+	sum := sha1.New()
+	fmt.Fprintf(sum, "%s %d\x00", kind, len(body))
+	sum.Write(body)
+	return sum.Sum(nil)
 }
 
 func SamePath(left, right string) bool {

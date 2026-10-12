@@ -130,6 +130,7 @@ type Drop struct {
 	Name string
 	Dir  string
 	URL  string
+	Hash string
 }
 
 // Fetch 把要复制的技能文件夹放进临时目录。本机有 git 时浅克隆并只检出这些目录，没有 git 时只从 GitHub 接口取。调用方负责 cleanup。
@@ -175,6 +176,7 @@ func Fetch(raw string) (cleanup func(), drops []Drop, kind string, line string) 
 			Name: name,
 			Dir:  skillDir,
 			URL:  remote.Recorded(branch, name),
+			Hash: treeAt(dir, remote.SkillRel, skillDir),
 		}}, "", ""
 	}
 	children, bad := skillChildren(dir)
@@ -184,10 +186,12 @@ func Fetch(raw string) (cleanup func(), drops []Drop, kind string, line string) 
 	}
 	drops = make([]Drop, 0, len(children))
 	for _, name := range children {
+		skillDir := filepath.Join(dir, "skills", name)
 		drops = append(drops, Drop{
 			Name: name,
-			Dir:  filepath.Join(dir, "skills", name),
+			Dir:  skillDir,
 			URL:  remote.Recorded(branch, name),
+			Hash: treeAt(dir, "skills/"+name, skillDir),
 		})
 	}
 	return cleanup, drops, "", ""
