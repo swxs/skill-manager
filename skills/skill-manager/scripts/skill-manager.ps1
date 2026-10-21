@@ -69,7 +69,7 @@ if (-not ((Test-Path -LiteralPath $dest) -and $version -and ($recorded -eq $vers
         } catch {
             Fail "下载失败: $zipUrl"
         }
-        $foundPath = Join-Path $unpack "bin\skill-manager.exe"
+        $foundPath = Join-Path $unpack "skill-manager\bin\skill-manager.exe"
         if (-not (Test-Path -LiteralPath $foundPath)) {
             Fail "没有这一版的运行时: skill-manager.exe"
         }

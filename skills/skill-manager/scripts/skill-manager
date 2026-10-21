@@ -62,7 +62,7 @@ if [ ! -f "$dest" ] || [ -z "$version" ] || [ "$recorded" != "$version" ]; then
     if ! unzip -q "$tmp/pkg.zip" -d "$tmp/unpack"; then
         fail "下载失败: $zip_url"
     fi
-    found="$tmp/unpack/bin/skill-manager"
+    found="$tmp/unpack/skill-manager/bin/skill-manager"
     if [ ! -f "$found" ]; then
         fail "没有这一版的运行时: skill-manager"
     fi

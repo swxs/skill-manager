@@ -2,7 +2,7 @@
 
 把本机技能目录装进 `~/.agents/skill-library`，再按配置链到当前仓库的 `.agents/skills`，或链到用户级 `~/.agents/skills`。
 
-这个仓库是公开的项目。技能正文在 `skills/skill-manager/`。装到 `~/.agents/skills/skill-manager` 之后，技能正文里的脚本路径才成立。下载对应平台的完整压缩包并解压到这个目录，或把仓库克隆到普通项目目录后再安装。
+这个仓库是公开的项目。技能正文在 `skills/skill-manager/`。装到 `~/.agents/skills/skill-manager` 之后，技能正文里的脚本路径才成立。下载对应平台的完整压缩包，解压到 `~/.agents/skills`，或把仓库克隆到普通项目目录后再安装。
 
 ## 做什么
 
@@ -28,7 +28,7 @@
 
 目标目录都是 `~/.agents/skills/skill-manager`。
 
-下载 [GitHub Release](https://github.com/swxs/skill-manager/releases) 里当前平台的 zip，解压到这个目录。压缩包根上已经有 `SKILL.md`、两条启动脚本，以及 `bin/` 下的运行时和 `version`，解压后即可使用。
+下载 [GitHub Release](https://github.com/swxs/skill-manager/releases) 里当前平台的 zip，解压到 `~/.agents/skills`。压缩包里套着一层 `skill-manager`，其中有 `SKILL.md`、两条启动脚本，以及 `bin/` 下的运行时和 `version`。
 
 克隆仓库时放到普通项目目录，不要放到 `~/.agents/skills/skill-manager`：
 

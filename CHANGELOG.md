@@ -1,5 +1,9 @@
 # 变更记录
 
+## [0.5.6] - 未发布
+
+- 发布 zip 套一层 `skill-manager` 文件夹。解压到 `~/.agents/skills` 即得到技能目录
+
 ## [0.5.5] - 未发布
 
 - 本机有 git 时，`install` 可以装 GitHub 以外的 https 仓库。GitLab 地址里的 `/-/tree/<分支>/` 与 `/tree/<分支>/` 一样只取对应目录；没有 git 时这些地址不安装
