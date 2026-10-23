@@ -1,0 +1,16 @@
+.scratch/README.md
+  h_ee4a963711c0f7 3,7,9-13,16-23,25,29
+.agents/skills/submit-branch/SKILL.md
+  h_ee4a963711c0f7 1-67
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.0",
+  "base_commit_sha": "0419fcab3dc432e9385ef6c0d8268244269601f0",
+  "prompts": {},
+  "humans": {
+    "h_ee4a963711c0f7": {
+      "author": "swxs"
+    }
+  }
+}
